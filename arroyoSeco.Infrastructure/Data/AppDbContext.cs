@@ -81,7 +81,7 @@ public class AppDbContext : DbContext, IAppDbContext
         b.Entity<Reserva>(e =>
         {
             e.HasIndex(r => r.Folio).IsUnique();
-            e.Property(r => r.Total).HasColumnType("decimal(65,30)");
+            e.Property(r => r.Total).HasColumnType("numeric(18,2)").HasDefaultValue(0);
             e.Property(r => r.ComprobanteUrl).HasMaxLength(500);
         });
 
