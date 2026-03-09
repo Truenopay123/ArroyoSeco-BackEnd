@@ -82,7 +82,7 @@ public class AlojamientosController : ControllerBase
         return CreatedAtAction(nameof(GetById), new { id }, id);
     }
 
-    public record ActualizarAlojamientoDto(string Nombre, string Ubicacion, double? Latitud, double? Longitud, string? Direccion, int MaxHuespedes, int Habitaciones, int Banos, decimal PrecioPorNoche, string? FotoPrincipal);
+    public record ActualizarAlojamientoDto(string Nombre, string Ubicacion, double? Latitud, double? Longitud, string? Direccion, int MaxHuespedes, int Habitaciones, int Banos, decimal PrecioPorNoche, string? FotoPrincipal, List<string>? Amenidades);
 
     // Solo Oferente
     [Authorize(Roles = "Oferente")]
@@ -102,6 +102,11 @@ public class AlojamientosController : ControllerBase
         a.Banos = dto.Banos;
         a.PrecioPorNoche = dto.PrecioPorNoche;
         a.FotoPrincipal = dto.FotoPrincipal;
+        a.Amenidades = dto.Amenidades?
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList() ?? new List<string>();
 
         await _db.SaveChangesAsync(ct);
         return NoContent();

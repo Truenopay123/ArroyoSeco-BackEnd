@@ -24,6 +24,7 @@ public class CrearAlojamientoCommand
     public decimal PrecioPorNoche { get; set; }
     public string? FotoPrincipal { get; set; }
     public List<string> FotosUrls { get; set; } = new();
+    public List<string> Amenidades { get; set; } = new();
 }
 
 public class CrearAlojamientoCommandHandler
@@ -64,6 +65,11 @@ public class CrearAlojamientoCommandHandler
             Banos = request.Banos,
             PrecioPorNoche = request.PrecioPorNoche,
             FotoPrincipal = request.FotoPrincipal,
+            Amenidades = request.Amenidades
+                .Where(a => !string.IsNullOrWhiteSpace(a))
+                .Select(a => a.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList(),
             Fotos = request.FotosUrls.Select((url, i) =>
                 new FotoAlojamiento { Url = url, Orden = i + 1 }).ToList()
         };

@@ -1,11 +1,12 @@
 using System;
-using System.Net.Http;
-using System.Text;
-using System.Text.Json;
+using System.Net;
+using System.Net.Mail;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Hosting;
 using arroyoSeco.Application.Common.Interfaces;
 
 namespace arroyoSeco.Infrastructure.Services;
@@ -14,13 +15,16 @@ public class SmtpEmailService : IEmailService
 {
     private readonly EmailOptions _options;
     private readonly ILogger<SmtpEmailService> _logger;
-    private readonly HttpClient _httpClient;
+    private readonly IHostEnvironment _env;
 
-    public SmtpEmailService(IOptions<EmailOptions> options, ILogger<SmtpEmailService> logger)
+    public SmtpEmailService(
+        IOptions<EmailOptions> options,
+        ILogger<SmtpEmailService> logger,
+        IHostEnvironment env)
     {
         _options = options.Value;
         _logger = logger;
-        _httpClient = new HttpClient();
+        _env = env;
     }
 
     public async Task<bool> SendEmailAsync(
@@ -37,13 +41,12 @@ public class SmtpEmailService : IEmailService
 
         try
         {
-            _logger.LogInformation($"Iniciando envío de correo a {toEmail} - Asunto: {subject}");
+            _logger.LogInformation("Iniciando envío de correo a {ToEmail} - Asunto: {Subject}", toEmail, subject);
 
-            // Verificar que las opciones estén configuradas
-            if (string.IsNullOrWhiteSpace(_options.SmtpPassword))
+            if (string.IsNullOrWhiteSpace(_options.SmtpHost) || _options.SmtpPort <= 0)
             {
-                _logger.LogError("API key de Brevo no está configurada (SmtpPassword vacío)");
-                return false;
+                _logger.LogWarning("Configuración SMTP inválida: host/puerto requeridos");
+                return await TryWriteOutboxAsync(toEmail, subject, htmlBody, ct);
             }
 
             if (string.IsNullOrWhiteSpace(_options.FromEmail))
@@ -52,43 +55,76 @@ public class SmtpEmailService : IEmailService
                 return false;
             }
 
-            // Usar API REST de Brevo
-            var payload = new
+            using var message = new MailMessage
             {
-                sender = new { email = _options.FromEmail, name = _options.FromName },
-                to = new[] { new { email = toEmail } },
-                subject = subject,
-                htmlContent = htmlBody
+                From = new MailAddress(_options.FromEmail, _options.FromName),
+                Subject = subject,
+                Body = htmlBody,
+                IsBodyHtml = true
+            };
+            message.To.Add(new MailAddress(toEmail));
+
+            using var client = new SmtpClient(_options.SmtpHost, _options.SmtpPort)
+            {
+                EnableSsl = _options.EnableSsl,
+                UseDefaultCredentials = false
             };
 
-            var json = JsonSerializer.Serialize(payload);
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-            // Agregar header de API key
-            _httpClient.DefaultRequestHeaders.Clear();
-            _httpClient.DefaultRequestHeaders.Add("api-key", _options.SmtpPassword);
-
-            _logger.LogInformation("Enviando solicitud a API de Brevo...");
-            var response = await _httpClient.PostAsync(
-                "https://api.brevo.com/v3/smtp/email",
-                content,
-                ct);
-
-            if (response.IsSuccessStatusCode)
+            if (!string.IsNullOrWhiteSpace(_options.SmtpUsername) && !string.IsNullOrWhiteSpace(_options.SmtpPassword))
             {
-                _logger.LogInformation($"✅ Correo enviado exitosamente a {toEmail}");
-                return true;
+                client.Credentials = new NetworkCredential(_options.SmtpUsername, _options.SmtpPassword);
             }
-            else
-            {
-                var errorContent = await response.Content.ReadAsStringAsync(ct);
-                _logger.LogError($"❌ Error Brevo API [{response.StatusCode}]: {errorContent}");
-                return false;
-            }
+
+            await client.SendMailAsync(message, ct);
+            _logger.LogInformation("Correo enviado exitosamente a {ToEmail}", toEmail);
+            return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, $"❌ Excepción enviando correo a {toEmail}");
+            _logger.LogError(ex, "Excepción enviando correo a {ToEmail}", toEmail);
+            return await TryWriteOutboxAsync(toEmail, subject, htmlBody, ct);
+        }
+    }
+
+    private async Task<bool> TryWriteOutboxAsync(string toEmail, string subject, string htmlBody, CancellationToken ct)
+    {
+        if (!_env.IsDevelopment() || !_options.UseFileOutboxInDevelopment)
+        {
+            return false;
+        }
+
+        try
+        {
+            var outboxPath = string.IsNullOrWhiteSpace(_options.FileOutboxPath)
+                ? "C:\\ArroyoSeco\\comprobantes\\emails"
+                : _options.FileOutboxPath;
+
+            Directory.CreateDirectory(outboxPath);
+
+            var safeTo = string.Join("_", toEmail.Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries));
+            var fileName = $"{DateTime.UtcNow:yyyyMMdd_HHmmssfff}_{safeTo}.html";
+            var filePath = Path.Combine(outboxPath, fileName);
+
+            var content = $"""
+                <!doctype html>
+                <html>
+                <head><meta charset="utf-8"><title>{subject}</title></head>
+                <body>
+                <p><strong>To:</strong> {toEmail}</p>
+                <p><strong>Subject:</strong> {subject}</p>
+                <hr />
+                {htmlBody}
+                </body>
+                </html>
+                """;
+
+            await File.WriteAllTextAsync(filePath, content, ct);
+            _logger.LogWarning("Correo guardado en outbox de desarrollo: {FilePath}", filePath);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "No se pudo guardar correo en outbox de desarrollo");
             return false;
         }
     }

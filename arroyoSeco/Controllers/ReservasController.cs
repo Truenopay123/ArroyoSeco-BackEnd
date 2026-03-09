@@ -114,6 +114,11 @@ public class ReservasController : ControllerBase
         if (string.IsNullOrWhiteSpace(_current.UserId))
             return Unauthorized(new { message = "Usuario no identificado" });
 
+        if (!cmd.AceptaPoliticaDatos && (!string.IsNullOrWhiteSpace(cmd.Sexo) || cmd.FechaNacimiento.HasValue || !string.IsNullOrWhiteSpace(cmd.LugarOrigen)))
+            return BadRequest(new { message = "Debes aceptar la política de privacidad para guardar datos demográficos." });
+
+        await ActualizarDemografiaDesdeReservaAsync(cmd);
+
         try
         {
             Console.WriteLine($"[ReservasController.Crear] Iniciando creación de reserva. AlojamientoId={cmd.AlojamientoId}, Usuario={_current.UserId}");
@@ -170,6 +175,11 @@ public class ReservasController : ControllerBase
         {
             return BadRequest($"Error JSON: {ex.Message}");
         }
+
+        if (!cmd.AceptaPoliticaDatos && (!string.IsNullOrWhiteSpace(cmd.Sexo) || cmd.FechaNacimiento.HasValue || !string.IsNullOrWhiteSpace(cmd.LugarOrigen)))
+            return BadRequest(new { message = "Debes aceptar la política de privacidad para guardar datos demográficos." });
+
+        await ActualizarDemografiaDesdeReservaAsync(cmd);
 
         int id;
         try
@@ -541,7 +551,6 @@ public class ReservasController : ControllerBase
         });
         return Ok(result);
     }
-    //
     private async Task<Dictionary<string,string>> MapearNombres(IEnumerable<string> ids)
     {
         var dic = new Dictionary<string,string>();
@@ -551,5 +560,37 @@ public class ReservasController : ControllerBase
             dic[id] = u?.Email ?? u?.UserName ?? id;
         }
         return dic;
+    }
+
+    private async Task ActualizarDemografiaDesdeReservaAsync(CrearReservaCommand cmd)
+    {
+        if (string.IsNullOrWhiteSpace(_current.UserId)) return;
+
+        var shouldUpdate = !string.IsNullOrWhiteSpace(cmd.Sexo)
+            || cmd.FechaNacimiento.HasValue
+            || !string.IsNullOrWhiteSpace(cmd.LugarOrigen);
+
+        if (!shouldUpdate) return;
+
+        var user = await _userManager.FindByIdAsync(_current.UserId);
+        if (user is null) return;
+
+        user.Sexo = cmd.Sexo ?? user.Sexo;
+        user.FechaNacimiento = NormalizeUtc(cmd.FechaNacimiento) ?? user.FechaNacimiento;
+        user.LugarOrigen = cmd.LugarOrigen ?? user.LugarOrigen;
+        await _userManager.UpdateAsync(user);
+    }
+
+    private static DateTime? NormalizeUtc(DateTime? value)
+    {
+        if (!value.HasValue) return null;
+
+        var dt = value.Value;
+        return dt.Kind switch
+        {
+            DateTimeKind.Utc => dt,
+            DateTimeKind.Local => dt.ToUniversalTime(),
+            _ => DateTime.SpecifyKind(dt, DateTimeKind.Utc)
+        };
     }
 }

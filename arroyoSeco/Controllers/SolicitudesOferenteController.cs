@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using arroyoSeco.Application.Common.Interfaces;
 using arroyoSeco.Domain.Entities.Solicitudes;
@@ -26,6 +27,7 @@ public class SolicitudesOferenteController : ControllerBase
     }
 
     // GET /api/solicitudesoferente?estatus=Pendiente
+    [Authorize(Roles = "Admin")]
     [HttpGet]
     public async Task<IActionResult> List([FromQuery] string? estatus, CancellationToken ct)
     {
@@ -35,6 +37,7 @@ public class SolicitudesOferenteController : ControllerBase
     }
 
     // POST /api/solicitudesoferente
+    [AllowAnonymous]
     [HttpPost]
     public async Task<IActionResult> Crear([FromBody] SolicitudOferente s, CancellationToken ct)
     {
@@ -60,6 +63,7 @@ public class SolicitudesOferenteController : ControllerBase
     }
 
     // GET /api/solicitudesoferente/{id}
+    [Authorize(Roles = "Admin")]
     [HttpGet("{id:int}")]
     public async Task<IActionResult> GetById(int id, CancellationToken ct)
     {
@@ -68,6 +72,7 @@ public class SolicitudesOferenteController : ControllerBase
     }
     
     // GET /api/solicitudesoferente/pendientes/count
+    [Authorize(Roles = "Admin")]
     [HttpGet("pendientes/count")]
     public async Task<IActionResult> CountPendientes(CancellationToken ct)
     {

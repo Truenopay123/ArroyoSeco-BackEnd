@@ -19,6 +19,7 @@ public class Alojamiento
     public int Banos { get; set; }
     public decimal PrecioPorNoche { get; set; }
     public string? FotoPrincipal { get; set; }
+    public List<string> Amenidades { get; set; } = new();
 
     public List<FotoAlojamiento> Fotos { get; set; } = new();
     public List<Reserva> Reservas { get; set; } = new();

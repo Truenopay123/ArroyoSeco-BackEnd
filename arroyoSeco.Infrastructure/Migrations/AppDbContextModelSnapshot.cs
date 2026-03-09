@@ -33,6 +33,10 @@ namespace arroyoSeco.Infrastructure.Migrations
                     b.Property<int>("Banos")
                         .HasColumnType("integer");
 
+                    b.Property<string>("Amenidades")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<string>("Direccion")
                         .HasColumnType("text");
 

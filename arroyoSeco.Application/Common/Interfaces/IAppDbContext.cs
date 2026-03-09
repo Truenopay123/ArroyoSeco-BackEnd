@@ -7,6 +7,8 @@ using arroyoSeco.Domain.Entities.Solicitudes;
 // Alias para desambiguar 'Oferente'
 using UsuarioOferente = arroyoSeco.Domain.Entities.Usuarios.Oferente;
 using arroyoSeco.Domain.Entities.Gastronomia;
+using arroyoSeco.Domain.Entities.Resenas;
+using arroyoSeco.Domain.Entities.Pagos;
 
 namespace arroyoSeco.Application.Common.Interfaces;
 
@@ -23,5 +25,7 @@ public interface IAppDbContext
     DbSet<MenuItem> MenuItems { get; }
     DbSet<Mesa> Mesas { get; }
     DbSet<ReservaGastronomia> ReservasGastronomia { get; }
+    DbSet<Resena> Resenas { get; }
+    DbSet<Pago> Pagos { get; }
     Task<int> SaveChangesAsync(CancellationToken ct = default);
 }

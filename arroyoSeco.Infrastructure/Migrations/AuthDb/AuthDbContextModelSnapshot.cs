@@ -127,6 +127,15 @@ namespace arroyoSeco.Infrastructure.Migrations.AuthDb
                     b.Property<bool>("TwoFactorEnabled")
                         .HasColumnType("boolean");
 
+                    b.Property<string>("Sexo")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("FechaNacimiento")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LugarOrigen")
+                        .HasColumnType("text");
+
                     b.Property<string>("UserName")
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");

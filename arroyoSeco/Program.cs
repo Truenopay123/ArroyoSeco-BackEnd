@@ -5,6 +5,8 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql.EntityFrameworkCore.PostgreSQL;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.FileProviders;
 using System.Text;
 using arroyoSeco.Infrastructure.Data;
@@ -12,7 +14,6 @@ using arroyoSeco.Infrastructure.Auth;
 using arroyoSeco.Infrastructure.Services;
 using arroyoSeco.Domain.Entities.Usuarios;
 using arroyoSeco.Application.Common.Interfaces;
-using arroyoSeco.Infrastructure.Services;
 using arroyoSeco.Application.Features.Alojamiento.Commands.Crear;
 using arroyoSeco.Application.Features.Reservas.Commands.Crear;
 using arroyoSeco.Application.Features.Gastronomia.Commands.Crear;
@@ -20,6 +21,7 @@ using arroyoSeco.Application.Features.Reservas.Commands.CambiarEstado;
 using arroyoSeco.Infrastructure.Storage;
 using System.Text.Json.Serialization;
 using System.Runtime.ExceptionServices;
+using System.Threading.RateLimiting;
 using arroyoSeco.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -129,16 +131,26 @@ builder.Services
     .AddIdentityCore<ApplicationUser>(opt =>
     {
         opt.User.RequireUniqueEmail = true;
-        opt.Password.RequireDigit = false;
-        opt.Password.RequireLowercase = false;
-        opt.Password.RequireNonAlphanumeric = false;
-        opt.Password.RequireUppercase = false;
-        opt.Password.RequiredLength = 6;
+        // Política de contraseñas segura
+        opt.Password.RequireDigit = true;
+        opt.Password.RequireLowercase = true;
+        opt.Password.RequireNonAlphanumeric = true;
+        opt.Password.RequireUppercase = true;
+        opt.Password.RequiredLength = 8;
+        // Bloqueo de cuenta tras 5 intentos fallidos
+        opt.Lockout.AllowedForNewUsers = true;
+        opt.Lockout.MaxFailedAccessAttempts = 5;
+        opt.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
     })
     .AddRoles<IdentityRole>()
     .AddEntityFrameworkStores<AuthDbContext>()
     .AddSignInManager()
     .AddDefaultTokenProviders();
+
+builder.Services.Configure<DataProtectionTokenProviderOptions>(o =>
+{
+    o.TokenLifespan = TimeSpan.FromHours(1);
+});
 
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
 var jwt = builder.Configuration.GetSection("Jwt").Get<JwtOptions>()!;
@@ -163,7 +175,26 @@ builder.Services.AddAuthentication(options =>
     };
 });
 
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorizationBuilder()
+    .SetFallbackPolicy(new AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .Build());
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    options.AddPolicy("auth-login", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+});
 
 builder.Services.AddScoped<IAppDbContext>(sp => sp.GetRequiredService<AppDbContext>());
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
@@ -225,25 +256,25 @@ builder.Services.PostConfigure<StorageOptions>(o =>
 
 // Configurar opciones de Email
 builder.Services.Configure<EmailOptions>(builder.Configuration.GetSection("Email"));
-var emailOptions = builder.Configuration.GetSection("Email").Get<EmailOptions>();
-if (emailOptions != null && string.IsNullOrWhiteSpace(emailOptions.SmtpHost))
-{
-    // Valores por defecto si no está configurado
-    emailOptions.SmtpHost = "smtp.mailtrap.io";
-    emailOptions.SmtpPort = 465;
-    emailOptions.FromEmail = "noreply@arroyoseco.com";
-    emailOptions.FromName = "Arroyo Seco";
-}
 builder.Services.PostConfigure<EmailOptions>(o =>
 {
-    if (emailOptions != null && !string.IsNullOrWhiteSpace(emailOptions.SmtpHost))
+    // Permite sobreescribir por variables de entorno sin dejar defaults silenciosos.
+    o.SmtpHost = Environment.GetEnvironmentVariable("EMAIL_SMTP_HOST") ?? o.SmtpHost;
+    o.SmtpUsername = Environment.GetEnvironmentVariable("EMAIL_SMTP_USERNAME") ?? o.SmtpUsername;
+    o.SmtpPassword = Environment.GetEnvironmentVariable("EMAIL_SMTP_PASSWORD") ?? o.SmtpPassword;
+    o.FromEmail = Environment.GetEnvironmentVariable("EMAIL_FROM") ?? o.FromEmail;
+    o.FromName = Environment.GetEnvironmentVariable("EMAIL_FROM_NAME") ?? o.FromName;
+
+    var smtpPortEnv = Environment.GetEnvironmentVariable("EMAIL_SMTP_PORT");
+    if (int.TryParse(smtpPortEnv, out var smtpPort) && smtpPort > 0)
     {
-        o.SmtpHost = emailOptions.SmtpHost;
-        o.SmtpPort = emailOptions.SmtpPort;
-        o.SmtpUsername = emailOptions.SmtpUsername;
-        o.SmtpPassword = emailOptions.SmtpPassword;
-        o.FromEmail = emailOptions.FromEmail;
-        o.FromName = emailOptions.FromName;
+        o.SmtpPort = smtpPort;
+    }
+
+    var enableSslEnv = Environment.GetEnvironmentVariable("EMAIL_ENABLE_SSL");
+    if (bool.TryParse(enableSslEnv, out var enableSsl))
+    {
+        o.EnableSsl = enableSsl;
     }
 });
 
@@ -286,6 +317,7 @@ app.UseSwaggerUI();
 
 app.UseHttpsRedirection();
 app.UseCors(CorsPolicy);
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -305,6 +337,46 @@ using (var scope = app.Services.CreateScope())
         Console.WriteLine("=== Applying database migrations...");
         appDbContext.Database.Migrate();
         authDbContext.Database.Migrate();
+
+        // Autocorrección defensiva para entornos donde la migración no quedó aplicada.
+        appDbContext.Database.ExecuteSqlRaw(@"
+            ALTER TABLE ""Alojamientos""
+            ADD COLUMN IF NOT EXISTS ""Amenidades"" text NOT NULL DEFAULT '[]';");
+
+        // Campos demográficos en AspNetUsers
+        authDbContext.Database.ExecuteSqlRaw(@"
+            ALTER TABLE ""AspNetUsers""
+            ADD COLUMN IF NOT EXISTS ""Sexo"" text NULL,
+            ADD COLUMN IF NOT EXISTS ""FechaNacimiento"" timestamp with time zone NULL,
+            ADD COLUMN IF NOT EXISTS ""LugarOrigen"" text NULL;");
+
+        // Tabla de reseñas
+        appDbContext.Database.ExecuteSqlRaw(@"
+            CREATE TABLE IF NOT EXISTS ""Resenas"" (
+                ""Id"" serial PRIMARY KEY,
+                ""AlojamientoId"" integer NOT NULL REFERENCES ""Alojamientos""(""Id"") ON DELETE CASCADE,
+                ""ReservaId"" integer NOT NULL UNIQUE REFERENCES ""Reservas""(""Id"") ON DELETE CASCADE,
+                ""ClienteId"" text NOT NULL,
+                ""Calificacion"" integer NOT NULL,
+                ""Comentario"" text NOT NULL,
+                ""Estado"" text NOT NULL DEFAULT 'Pendiente',
+                ""FechaCreacion"" timestamp with time zone NOT NULL DEFAULT now()
+            );");
+
+        // Tabla de pagos (Mercado Pago)
+        appDbContext.Database.ExecuteSqlRaw(@"
+            CREATE TABLE IF NOT EXISTS ""Pagos"" (
+                ""Id"" serial PRIMARY KEY,
+                ""ReservaId"" integer NOT NULL REFERENCES ""Reservas""(""Id"") ON DELETE CASCADE,
+                ""MercadoPagoPreferenceId"" text NULL,
+                ""MercadoPagoPaymentId"" text NULL,
+                ""Estado"" text NOT NULL DEFAULT 'Pendiente',
+                ""Monto"" numeric(18,2) NOT NULL DEFAULT 0,
+                ""MetodoPago"" text NULL,
+                ""FechaCreacion"" timestamp with time zone NOT NULL DEFAULT now(),
+                ""FechaActualizacion"" timestamp with time zone NULL
+            );");
+
         Console.WriteLine("=== Migrations applied successfully");
     }
     catch (Exception ex)
@@ -329,42 +401,49 @@ using (var scope = app.Services.CreateScope())
     
     // Crear usuario admin si no existe
     var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
-    var adminEmail = builder.Configuration["SeedAdmin:Email"] ?? "admin@arroyo.com";
-    var adminPassword = builder.Configuration["SeedAdmin:Password"] ?? "Admin123!";
+    var adminEmail = builder.Configuration["SeedAdmin:Email"];
+    var adminPassword = builder.Configuration["SeedAdmin:Password"];
 
-    var adminUser = await userManager.FindByEmailAsync(adminEmail);
-    if (adminUser == null)
+    if (string.IsNullOrWhiteSpace(adminEmail) || string.IsNullOrWhiteSpace(adminPassword))
     {
-        adminUser = new ApplicationUser
-        {
-            UserName = adminEmail,
-            Email = adminEmail,
-            EmailConfirmed = true
-        };
-        
-        var result = await userManager.CreateAsync(adminUser, adminPassword);
-        if (result.Succeeded)
-        {
-            await userManager.AddToRoleAsync(adminUser, "Admin");
-            Console.WriteLine($"=== Admin user created: {adminEmail}");
-        }
-        else
-        {
-            Console.WriteLine($"=== Error creating admin: {string.Join(", ", result.Errors.Select(e => e.Description))}");
-        }
+        Console.WriteLine("=== SeedAdmin no configurado. Se omite creación automática de admin.");
     }
     else
     {
-        // Verify and assign Admin role if user exists but doesn't have it
-        var adminRoles = await userManager.GetRolesAsync(adminUser);
-        if (!adminRoles.Contains("Admin"))
+        var adminUser = await userManager.FindByEmailAsync(adminEmail);
+        if (adminUser == null)
         {
-            await userManager.AddToRoleAsync(adminUser, "Admin");
-            Console.WriteLine($"=== Admin role assigned to existing user: {adminEmail}");
+            adminUser = new ApplicationUser
+            {
+                UserName = adminEmail,
+                Email = adminEmail,
+                EmailConfirmed = true
+            };
+            
+            var result = await userManager.CreateAsync(adminUser, adminPassword);
+            if (result.Succeeded)
+            {
+                await userManager.AddToRoleAsync(adminUser, "Admin");
+                Console.WriteLine($"=== Admin user created: {adminEmail}");
+            }
+            else
+            {
+                Console.WriteLine($"=== Error creating admin: {string.Join(", ", result.Errors.Select(e => e.Description))}");
+            }
         }
         else
         {
-            Console.WriteLine($"=== Admin user already exists with correct role: {adminEmail}");
+            // Verify and assign Admin role if user exists but doesn't have it
+            var adminRoles = await userManager.GetRolesAsync(adminUser);
+            if (!adminRoles.Contains("Admin"))
+            {
+                await userManager.AddToRoleAsync(adminUser, "Admin");
+                Console.WriteLine($"=== Admin role assigned to existing user: {adminEmail}");
+            }
+            else
+            {
+                Console.WriteLine($"=== Admin user already exists with correct role: {adminEmail}");
+            }
         }
     }
 }
