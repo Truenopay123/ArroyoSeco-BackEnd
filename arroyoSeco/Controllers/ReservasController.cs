@@ -94,6 +94,7 @@ public class ReservasController : ControllerBase
             r.Estado,
             r.FechaEntrada,
             r.FechaSalida,
+            r.NumeroHuespedes,
             r.Total,
             r.FechaReserva,
             r.ComprobanteUrl
@@ -453,6 +454,7 @@ public class ReservasController : ControllerBase
             r.Estado,
             r.FechaEntrada,
             r.FechaSalida,
+            r.NumeroHuespedes,
             r.Total,
             r.FechaReserva,
             r.ComprobanteUrl,
@@ -506,6 +508,7 @@ public class ReservasController : ControllerBase
             r.Estado,
             r.FechaEntrada,
             r.FechaSalida,
+            r.NumeroHuespedes,
             r.Total,
             r.FechaReserva,
             r.ComprobanteUrl,
@@ -545,6 +548,7 @@ public class ReservasController : ControllerBase
             r.Estado,
             r.FechaEntrada,
             r.FechaSalida,
+            r.NumeroHuespedes,
             r.Total,
             r.FechaReserva,
             r.ComprobanteUrl

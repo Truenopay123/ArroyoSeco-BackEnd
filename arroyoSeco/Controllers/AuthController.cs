@@ -58,6 +58,7 @@ public class AuthController : ControllerBase
     public record ResetPasswordDto(string Email, string Token, string PasswordNueva);
     public record ReenviarConfirmacionDto(string Email);
     public record ActualizarDemografiaDto(string? Sexo, DateTime? FechaNacimiento, string? LugarOrigen);
+    public record ActualizarPerfilDto(string? Email, string? Telefono);
 
     // ── Registro ────────────────────────────────────────────────────────────
 
@@ -373,6 +374,35 @@ public class AuthController : ControllerBase
         await _userManager.UpdateAsync(user);
 
         return Ok(new { message = "Datos actualizados." });
+    }
+
+    // ── Actualizar perfil (email, teléfono) ────────────────────────────────
+
+    [Authorize]
+    [HttpPut("perfil")]
+    public async Task<IActionResult> ActualizarPerfil([FromBody] ActualizarPerfilDto dto)
+    {
+        var user = await _userManager.GetUserAsync(User);
+        if (user is null) return Unauthorized();
+
+        if (!string.IsNullOrWhiteSpace(dto.Email) && dto.Email != user.Email)
+        {
+            var existingUser = await _userManager.FindByEmailAsync(dto.Email);
+            if (existingUser != null && existingUser.Id != user.Id)
+                return BadRequest(new { message = "El email ya está registrado." });
+
+            user.Email = dto.Email;
+            user.UserName = dto.Email;
+        }
+
+        if (!string.IsNullOrWhiteSpace(dto.Telefono))
+            user.PhoneNumber = dto.Telefono;
+
+        var result = await _userManager.UpdateAsync(user);
+        if (!result.Succeeded)
+            return BadRequest(new { message = "No fue posible actualizar el perfil", errors = result.Errors });
+
+        return Ok(new { message = "Perfil actualizado exitosamente." });
     }
 
     // ── Cambiar contraseña ────────────────────────────────────────────────

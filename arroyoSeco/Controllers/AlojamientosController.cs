@@ -39,17 +39,21 @@ public class AlojamientosController : ControllerBase
         var a = await _db.Alojamientos
             .Include(x => x.Fotos)
             .Include(x => x.Reservas)
+            .Include(x => x.Oferente)
             .FirstOrDefaultAsync(x => x.Id == id, ct);
         return a is null ? NotFound() : Ok(a);
     }
 
-    // Nuevo: rangos ocupados (Confirmada) para pintar en calendario
+    // Rangos ocupados para pintar en calendario
     [AllowAnonymous]
     [HttpGet("{id:int}/calendario")]
     public async Task<IActionResult> Calendario(int id, CancellationToken ct)
     {
+        var today = DateTime.UtcNow.Date;
         var rangos = await _db.Reservas
-            .Where(r => r.AlojamientoId == id && r.Estado == "Confirmada")
+            .Where(r => r.AlojamientoId == id
+                && r.Estado == "Confirmada"
+                && r.FechaSalida.Date >= today)
             .Select(r => new { inicio = r.FechaEntrada, fin = r.FechaSalida })
             .AsNoTracking()
             .ToListAsync(ct);

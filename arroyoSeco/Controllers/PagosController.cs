@@ -1,10 +1,13 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
 using System.Text;
 using arroyoSeco.Application.Common.Interfaces;
+using arroyoSeco.Domain.Entities.Alojamientos;
 using arroyoSeco.Domain.Entities.Pagos;
+using arroyoSeco.Domain.Entities.Usuarios;
 using MercadoPago.Config;
 using MercadoPago.Client.Preference;
 using MercadoPago.Resource.Preference;
@@ -21,13 +24,23 @@ public class PagosController : ControllerBase
     private readonly IConfiguration _config;
     private readonly ILogger<PagosController> _logger;
     private readonly ICurrentUserService _current;
+    private readonly UserManager<ApplicationUser> _userManager;
+    private readonly IEmailService _email;
 
-    public PagosController(IAppDbContext db, IConfiguration config, ILogger<PagosController> logger, ICurrentUserService current)
+    public PagosController(
+        IAppDbContext db,
+        IConfiguration config,
+        ILogger<PagosController> logger,
+        ICurrentUserService current,
+        UserManager<ApplicationUser> userManager,
+        IEmailService email)
     {
         _db = db;
         _config = config;
         _logger = logger;
         _current = current;
+        _userManager = userManager;
+        _email = email;
     }
 
     public record CrearPreferenciaDto(int ReservaId);
@@ -156,6 +169,19 @@ public class PagosController : ControllerBase
                 },
                 NotificationUrl = $"{backendBase}/api/pagos/webhook"
             };
+
+            // Auto return falla en entornos locales/no-https. Se habilita solo con URL pública HTTPS.
+            var canUseAutoReturn = frontendUri.Scheme == Uri.UriSchemeHttps && !frontendUri.IsLoopback;
+            if (canUseAutoReturn)
+            {
+                request.AutoReturn = "approved";
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Mercado Pago AutoReturn deshabilitado para FrontendBaseUrl={FrontendBaseUrl}. Usa HTTPS público para retorno automático.",
+                    frontendBase);
+            }
 
             Preference preference = await client.CreateAsync(request);
 
@@ -373,6 +399,8 @@ public class PagosController : ControllerBase
 
         if (pago is null) return;
 
+        var estadoAnteriorPago = pago.Estado;
+
         pago.MercadoPagoPaymentId = mpPaymentId;
         pago.MetodoPago = mpPayment.PaymentMethodId;
         pago.FechaActualizacion = DateTime.UtcNow;
@@ -386,7 +414,9 @@ public class PagosController : ControllerBase
         };
 
         // Actualizar estado de la reserva
-        var reserva = await _db.Reservas.FindAsync(pago.ReservaId);
+        var reserva = await _db.Reservas
+            .Include(r => r.Alojamiento)
+            .FirstOrDefaultAsync(r => r.Id == pago.ReservaId);
         if (reserva is not null)
         {
             reserva.Estado = pago.Estado switch
@@ -399,6 +429,51 @@ public class PagosController : ControllerBase
         }
 
         await _db.SaveChangesAsync();
+
+        // Evita correos duplicados por reintentos de webhook: solo al primer cambio a aprobado.
+        var pasoAAprobado = !string.Equals(estadoAnteriorPago, "Aprobado", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(pago.Estado, "Aprobado", StringComparison.OrdinalIgnoreCase);
+
+        if (pasoAAprobado && reserva is not null)
+        {
+            await EnviarCorreoConfirmacionPagoAsync(reserva, pago);
+        }
+    }
+
+    private async Task EnviarCorreoConfirmacionPagoAsync(Reserva reserva, Pago pago)
+    {
+        try
+        {
+            var user = await _userManager.FindByIdAsync(reserva.ClienteId);
+            var toEmail = user?.Email;
+            if (string.IsNullOrWhiteSpace(toEmail))
+            {
+                _logger.LogWarning("No se encontró email del cliente para enviar confirmación. ReservaId={ReservaId}", pago.ReservaId);
+                return;
+            }
+
+            var alojamientoNombre = reserva.Alojamiento?.Nombre ?? "Alojamiento";
+            var fechaEntrada = reserva.FechaEntrada.ToString("dd/MM/yyyy");
+            var fechaSalida = reserva.FechaSalida.ToString("dd/MM/yyyy");
+
+            var html = $@"<h2>Pago confirmado</h2>
+<p>Tu pago fue aprobado y tu reserva quedó confirmada.</p>
+<ul>
+  <li><strong>Folio:</strong> {reserva.Folio}</li>
+  <li><strong>Alojamiento:</strong> {alojamientoNombre}</li>
+  <li><strong>Check-in:</strong> {fechaEntrada}</li>
+  <li><strong>Check-out:</strong> {fechaSalida}</li>
+  <li><strong>Total pagado:</strong> ${pago.Monto:N2}</li>
+  <li><strong>Estado:</strong> Confirmada</li>
+</ul>
+<p>Gracias por reservar en Arroyo Seco.</p>";
+
+            await _email.SendEmailAsync(toEmail, $"Reserva confirmada - {reserva.Folio}", html);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error enviando correo de confirmación de pago. ReservaId={ReservaId}", pago.ReservaId);
+        }
     }
 
     private bool EsWebhookValido(string body)

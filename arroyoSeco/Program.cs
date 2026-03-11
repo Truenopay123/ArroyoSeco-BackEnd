@@ -377,6 +377,11 @@ using (var scope = app.Services.CreateScope())
                 ""FechaActualizacion"" timestamp with time zone NULL
             );");
 
+        // Cantidad de huéspedes por reserva
+        appDbContext.Database.ExecuteSqlRaw(@"
+            ALTER TABLE ""Reservas""
+            ADD COLUMN IF NOT EXISTS ""NumeroHuespedes"" integer NOT NULL DEFAULT 1;");
+
         Console.WriteLine("=== Migrations applied successfully");
     }
     catch (Exception ex)
