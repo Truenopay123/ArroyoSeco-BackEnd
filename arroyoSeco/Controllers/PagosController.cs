@@ -123,17 +123,29 @@ public class PagosController : ControllerBase
             var nights = (int)(reserva.FechaSalida - reserva.FechaEntrada).TotalDays;
             nights = Math.Max(nights, 1);
 
+            var currencyIdRaw = _config["MercadoPago:CurrencyId"];
+            var currencyId = string.IsNullOrWhiteSpace(currencyIdRaw)
+                ? null
+                : currencyIdRaw.Trim().ToUpperInvariant();
+
+            var item = new PreferenceItemRequest
+            {
+                Title = $"Reserva {reserva.Alojamiento?.Nombre ?? "Alojamiento"} - {reserva.Folio}",
+                Quantity = nights,
+                UnitPrice = reserva.Total / nights
+            };
+
+            // Si no se define moneda, Mercado Pago usa la moneda de la cuenta/país del vendedor.
+            if (!string.IsNullOrWhiteSpace(currencyId))
+            {
+                item.CurrencyId = currencyId;
+            }
+
             var request = new PreferenceRequest
             {
                 Items = new List<PreferenceItemRequest>
                 {
-                    new PreferenceItemRequest
-                    {
-                        Title = $"Reserva {reserva.Alojamiento?.Nombre ?? "Alojamiento"} - {reserva.Folio}",
-                        Quantity = nights,
-                        UnitPrice = reserva.Total / nights,
-                        CurrencyId = "ARS"
-                    }
+                    item
                 },
                 ExternalReference = reserva.Id.ToString(),
                 BackUrls = new PreferenceBackUrlsRequest
