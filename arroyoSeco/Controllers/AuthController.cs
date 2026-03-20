@@ -202,14 +202,41 @@ public class AuthController : ControllerBase
             });
         }
 
-        // Login completo — emitir JWT
+        // Si el usuario tiene rostro registrado, requerir verificación facial
+        if (!string.IsNullOrEmpty(user.FaceDescriptor))
+        {
+            var tempToken = _token.GenerateTempToken(user.Id, user.Email!);
+            return Ok(new
+            {
+                requiresFaceAuth = true,
+                tempToken,
+                faceDescriptor = user.FaceDescriptor,
+                hasFaceEnrolled = true
+            });
+        }
+
+        // Admin/Oferente sin TOTP ni rostro → obligar a registrar rostro antes de entrar
+        var rolesCheck = await _userManager.GetRolesAsync(user);
+        if (rolesCheck.Any(r => r.Equals("Admin", StringComparison.OrdinalIgnoreCase)
+                              || r.Equals("Oferente", StringComparison.OrdinalIgnoreCase)))
+        {
+            var enrollToken = _token.GenerateTempToken(user.Id, user.Email!);
+            return Ok(new
+            {
+                requiresFaceEnroll = true,
+                tempToken = enrollToken,
+                email = user.Email
+            });
+        }
+
+        // Login completo para Cliente — emitir JWT
         if (!user.FechaPrimerLogin.HasValue)
         {
             user.FechaPrimerLogin = DateTime.UtcNow;
             await _userManager.UpdateAsync(user);
         }
 
-        var roles = await _userManager.GetRolesAsync(user);
+        var roles = rolesCheck;
         var jwt = _token.Generate(user.Id, user.Email!, roles, user.RequiereCambioPassword);
         return Ok(new { token = jwt });
     }

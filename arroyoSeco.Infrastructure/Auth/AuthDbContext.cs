@@ -13,5 +13,10 @@ public class AuthDbContext : IdentityDbContext<ApplicationUser, IdentityRole, st
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
+
+        // Mapear FaceDescriptor como columna JSONB en PostgreSQL
+        builder.Entity<ApplicationUser>()
+            .Property(u => u.FaceDescriptor)
+            .HasColumnType("jsonb");
     }
 }

@@ -350,6 +350,11 @@ using (var scope = app.Services.CreateScope())
             ADD COLUMN IF NOT EXISTS ""FechaNacimiento"" timestamp with time zone NULL,
             ADD COLUMN IF NOT EXISTS ""LugarOrigen"" text NULL;");
 
+        // Descriptor facial para 2FA con reconocimiento facial
+        authDbContext.Database.ExecuteSqlRaw(@"
+            ALTER TABLE ""AspNetUsers""
+            ADD COLUMN IF NOT EXISTS ""FaceDescriptor"" jsonb NULL;");
+
         // Tabla de reseñas
         appDbContext.Database.ExecuteSqlRaw(@"
             CREATE TABLE IF NOT EXISTS ""Resenas"" (
