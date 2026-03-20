@@ -368,6 +368,17 @@ using (var scope = app.Services.CreateScope())
                 ""FechaCreacion"" timestamp with time zone NOT NULL DEFAULT now()
             );");
 
+        // Compatibilidad con bases antiguas: columnas de moderación de reseñas.
+        appDbContext.Database.ExecuteSqlRaw(@"
+            ALTER TABLE ""Resenas""
+            ADD COLUMN IF NOT EXISTS ""MotivoReporte"" text NULL,
+            ADD COLUMN IF NOT EXISTS ""FechaReporte"" timestamp with time zone NULL,
+            ADD COLUMN IF NOT EXISTS ""OfferenteIdQueReporto"" text NULL;");
+
+        appDbContext.Database.ExecuteSqlRaw(@"
+            ALTER TABLE ""Resenas""
+            ALTER COLUMN ""Estado"" SET DEFAULT 'publicada';");
+
         // Tabla de pagos (Mercado Pago)
         appDbContext.Database.ExecuteSqlRaw(@"
             CREATE TABLE IF NOT EXISTS ""Pagos"" (
