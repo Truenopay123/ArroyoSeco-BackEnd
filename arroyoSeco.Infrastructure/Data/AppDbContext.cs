@@ -133,7 +133,7 @@ public class AppDbContext : DbContext, IAppDbContext
         {
             e.HasIndex(r => r.ReservaId).IsUnique(); // una reseña por reserva
             e.HasIndex(r => r.AlojamientoId);
-            e.Property(r => r.Estado).HasDefaultValue("Pendiente");
+            e.Property(r => r.Estado).HasDefaultValue("publicada");
             e.Property(r => r.FechaCreacion).HasDefaultValueSql("now()");
             e.Property(r => r.Comentario).HasMaxLength(2000);
 

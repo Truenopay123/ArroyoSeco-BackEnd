@@ -12,6 +12,7 @@ public class Reserva
     public DateTime FechaEntrada { get; set; }
     public DateTime FechaSalida { get; set; }
     public decimal Total { get; set; }
+    public int NumeroHuespedes { get; set; } = 1;
     public string Estado { get; set; } = "Pendiente";
     public DateTime FechaReserva { get; set; } = DateTime.UtcNow;
     public string? ComprobanteUrl { get; set; }

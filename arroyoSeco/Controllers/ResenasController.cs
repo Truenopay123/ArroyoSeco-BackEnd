@@ -16,9 +16,9 @@ public class ResenasController : ControllerBase
     public ResenasController(IAppDbContext db) => _db = db;
 
     public record CrearResenaDto(int ReservaId, int Calificacion, string Comentario);
-    public record ModerarResenaDto(string Estado); // Aprobada | Rechazada
+    public record ReportarResenaDto(string Motivo); // Motivo del reporte
 
-    // ── Cliente: crear reseña ─────────────────────────────────────────────
+    // ── Cliente: crear reseña (se publica automáticamente) ──────────────────
 
     [Authorize(Roles = "Cliente")]
     [HttpPost]
@@ -40,7 +40,11 @@ public class ResenasController : ControllerBase
         if (reserva is null)
             return NotFound(new { message = "Reserva no encontrada." });
 
-        if (reserva.Estado != "Completada")
+        // Considerar completada si: Estado == "Completada" O si está confirmada y la fecha de salida ya pasó
+        var estaCompletada = reserva.Estado == "Completada"
+            || (reserva.Estado == "Confirmada" && reserva.FechaSalida <= DateTime.UtcNow);
+
+        if (!estaCompletada)
             return BadRequest(new { message = "Solo puedes reseñar reservas completadas." });
 
         // Evitar duplicados
@@ -55,23 +59,23 @@ public class ResenasController : ControllerBase
             ClienteId     = clienteId,
             Calificacion  = dto.Calificacion,
             Comentario    = dto.Comentario.Trim(),
-            Estado        = "Pendiente"
+            Estado        = "publicada"  // ← Publicada automáticamente, sin aprobación previa
         };
 
         _db.Resenas.Add(resena);
         await _db.SaveChangesAsync();
 
-        return Created($"/api/resenas/{resena.Id}", new { message = "Reseña enviada. Será revisada antes de publicarse.", id = resena.Id });
+        return Created($"/api/resenas/{resena.Id}", new { message = "Reseña publicada exitosamente.", id = resena.Id });
     }
 
-    // ── Público: listar reseñas aprobadas de un alojamiento ──────────────
+    // ── Público: listar reseñas publicadas de un alojamiento ──────────────
 
     [AllowAnonymous]
     [HttpGet("alojamiento/{alojamientoId}")]
     public async Task<IActionResult> PorAlojamiento(int alojamientoId)
     {
         var resenas = await _db.Resenas
-            .Where(r => r.AlojamientoId == alojamientoId && r.Estado == "Aprobada")
+            .Where(r => r.AlojamientoId == alojamientoId && r.Estado == "publicada")
             .OrderByDescending(r => r.FechaCreacion)
             .Select(r => new
             {
@@ -90,7 +94,7 @@ public class ResenasController : ControllerBase
         return Ok(new { promedio, total = resenas.Count, resenas });
     }
 
-    // ── Oferente: ver reseñas de su alojamiento ───────────────────────────
+    // ── Oferente: ver reseñas de su alojamiento (incluyendo reportadas) ───
 
     [Authorize(Roles = "Oferente")]
     [HttpGet("mis-alojamientos")]
@@ -100,7 +104,7 @@ public class ResenasController : ControllerBase
 
         var resenas = await _db.Resenas
             .Include(r => r.Alojamiento)
-            .Where(r => r.Alojamiento!.OferenteId == oferenteId)
+            .Where(r => r.Alojamiento!.OferenteId == oferenteId && r.Estado != "eliminada")
             .OrderByDescending(r => r.FechaCreacion)
             .Select(r => new
             {
@@ -112,6 +116,8 @@ public class ResenasController : ControllerBase
                 r.Calificacion,
                 r.Comentario,
                 r.Estado,
+                r.MotivoReporte,
+                r.FechaReporte,
                 r.FechaCreacion
             })
             .ToListAsync();
@@ -129,7 +135,7 @@ public class ResenasController : ControllerBase
 
         var resenas = await _db.Resenas
             .Include(r => r.Alojamiento)
-            .Where(r => r.ClienteId == clienteId)
+            .Where(r => r.ClienteId == clienteId && r.Estado != "eliminada")
             .OrderByDescending(r => r.FechaCreacion)
             .Select(r => new
             {
@@ -147,13 +153,16 @@ public class ResenasController : ControllerBase
         return Ok(resenas);
     }
 
-    // ── Admin: listar todas las reseñas ───────────────────────────────────
+    // ── Admin: listar todas las reseñas (excepto eliminadas) ──────────────
 
     [Authorize(Roles = "Admin")]
     [HttpGet]
     public async Task<IActionResult> ListarAll([FromQuery] string? estado)
     {
-        var query = _db.Resenas.Include(r => r.Alojamiento).AsQueryable();
+        var query = _db.Resenas
+            .Include(r => r.Alojamiento)
+            .Where(r => r.Estado != "eliminada")
+            .AsQueryable();
 
         if (!string.IsNullOrEmpty(estado))
             query = query.Where(r => r.Estado == estado);
@@ -170,6 +179,8 @@ public class ResenasController : ControllerBase
                 r.Calificacion,
                 r.Comentario,
                 r.Estado,
+                r.MotivoReporte,
+                r.FechaReporte,
                 r.FechaCreacion
             })
             .ToListAsync();
@@ -177,37 +188,116 @@ public class ResenasController : ControllerBase
         return Ok(resenas);
     }
 
-    // ── Admin: moderar reseña ─────────────────────────────────────────────
+    // ── Oferente: reportar una reseña injusta o falsa ──────────────────────
 
-    [Authorize(Roles = "Admin")]
-    [HttpPatch("{id}/moderar")]
-    public async Task<IActionResult> Moderar(int id, [FromBody] ModerarResenaDto dto)
+    [Authorize(Roles = "Oferente")]
+    [HttpPost("{id}/reportar")]
+    public async Task<IActionResult> ReportarResena(int id, [FromBody] ReportarResenaDto dto)
     {
-        var estados = new[] { "Aprobada", "Rechazada" };
-        if (!estados.Contains(dto.Estado))
-            return BadRequest(new { message = "Estado inválido. Usa 'Aprobada' o 'Rechazada'." });
+        var oferenteId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (oferenteId is null) return Unauthorized();
 
-        var resena = await _db.Resenas.FindAsync(id);
-        if (resena is null) return NotFound();
+        if (string.IsNullOrWhiteSpace(dto.Motivo) || dto.Motivo.Length < 10)
+            return BadRequest(new { message = "El motivo debe tener al menos 10 caracteres." });
 
-        resena.Estado = dto.Estado;
+        var resena = await _db.Resenas
+            .Include(r => r.Alojamiento)
+            .FirstOrDefaultAsync(r => r.Id == id);
+
+        if (resena is null)
+            return NotFound(new { message = "Reseña no encontrada." });
+
+        // Verificar que la reseña pertenece a un alojamiento del Oferente
+        if (resena.Alojamiento?.OferenteId != oferenteId)
+            return StatusCode(403, new { message = "No puedes reportar reseñas de otros oferentes." });
+
+        if (resena.Estado == "eliminada")
+            return BadRequest(new { message = "No puedes reportar una reseña que ya fue eliminada." });
+
+        if (resena.Estado == "reportada")
+            return BadRequest(new { message = "Esta reseña ya fue reportada anteriormente." });
+
+        // Cambiar estado a reportada
+        resena.Estado = "reportada";
+        resena.MotivoReporte = dto.Motivo.Trim();
+        resena.FechaReporte = DateTime.UtcNow;
+        resena.OfferenteIdQueReporto = oferenteId;
+
         await _db.SaveChangesAsync();
 
-        return Ok(new { message = $"Reseña {dto.Estado.ToLower()} correctamente." });
+        return Ok(new { message = "Reseña reportada exitosamente. El Admin la revisará próximamente.", id = resena.Id });
     }
 
-    // ── Admin: eliminar reseña ────────────────────────────────────────────
+    // ── Admin: listar todas las reseñas reportadas ────────────────────────
+
+    [Authorize(Roles = "Admin")]
+    [HttpGet("reportadas")]
+    public async Task<IActionResult> ResenasReportadas()
+    {
+        var resenas = await _db.Resenas
+            .Include(r => r.Alojamiento)
+            .Where(r => r.Estado == "reportada")
+            .OrderByDescending(r => r.FechaReporte)
+            .Select(r => new
+            {
+                r.Id,
+                r.AlojamientoId,
+                alojamientoNombre = r.Alojamiento!.Nombre,
+                r.ClienteId,
+                r.Calificacion,
+                r.Comentario,
+                r.MotivoReporte,
+                r.OfferenteIdQueReporto,
+                r.FechaCreacion,
+                r.FechaReporte
+            })
+            .ToListAsync();
+
+        return Ok(resenas);
+    }
+
+    // ── Admin: eliminar una reseña reportada ──────────────────────────────
 
     [Authorize(Roles = "Admin")]
     [HttpDelete("{id}")]
-    public async Task<IActionResult> Eliminar(int id)
+    public async Task<IActionResult> EliminarResena(int id)
     {
         var resena = await _db.Resenas.FindAsync(id);
-        if (resena is null) return NotFound();
+        if (resena is null)
+            return NotFound(new { message = "Reseña no encontrada." });
 
-        _db.Resenas.Remove(resena);
+        if (resena.Estado != "reportada")
+            return BadRequest(new { message = "Solo puedes eliminar reseñas que están reportadas." });
+
+        // Cambiar estado a eliminada en lugar de borrar físicamente
+        resena.Estado = "eliminada";
         await _db.SaveChangesAsync();
-        return NoContent();
+
+        return Ok(new { message = "Reseña eliminada correctamente." });
+    }
+
+    // ── Admin: desestimar un reporte (ignorar y dejar visible) ────────────
+
+    [Authorize(Roles = "Admin")]
+    [HttpPatch("{id}/desestimar-reporte")]
+    public async Task<IActionResult> DestimarReporte(int id)
+    {
+        var resena = await _db.Resenas.FindAsync(id);
+        if (resena is null)
+            return NotFound(new { message = "Reseña no encontrada." });
+
+        if (resena.Estado != "reportada")
+            return BadRequest(new { message = "Solo puedes desestimar reportes de reseñas reportadas." });
+
+        // Volver a publicada y limpiar datos de reporte
+        resena.Estado = "publicada";
+        resena.MotivoReporte = null;
+        resena.FechaReporte = null;
+        resena.OfferenteIdQueReporto = null;
+
+        await _db.SaveChangesAsync();
+
+        return Ok(new { message = "Reporte desestimado. La reseña vuelve a su estado publicado." });
     }
 
     // ── Admin: conocer reservas que puedan ser reseñadas ─────────────────
@@ -218,9 +308,12 @@ public class ResenasController : ControllerBase
     {
         var clienteId = User.FindFirstValue(ClaimTypes.NameIdentifier);
 
+        var now = DateTime.UtcNow;
         var reservasCompletadas = await _db.Reservas
             .Include(r => r.Alojamiento)
-            .Where(r => r.ClienteId == clienteId && r.Estado == "Completada")
+            .Where(r => r.ClienteId == clienteId
+                && (r.Estado == "Completada"
+                    || (r.Estado == "Confirmada" && r.FechaSalida <= now)))
             .ToListAsync();
 
         var reservasConResena = await _db.Resenas

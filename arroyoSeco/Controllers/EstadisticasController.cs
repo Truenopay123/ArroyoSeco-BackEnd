@@ -156,21 +156,34 @@ public class EstadisticasController : ControllerBase
     [HttpGet("rating-alojamientos")]
     public async Task<IActionResult> RatingAlojamientos()
     {
-        var ratings = await _db.Resenas
+        var ratingsRaw = await _db.Resenas
             .Where(r => r.Estado == "Aprobada")
-            .Include(r => r.Alojamiento)
-            .GroupBy(r => new { r.AlojamientoId, r.Alojamiento!.Nombre })
+            .GroupBy(r => r.AlojamientoId)
             .Select(g => new
             {
-                alojamientoId = g.Key.AlojamientoId,
-                nombre        = g.Key.Nombre,
-                promedio      = Math.Round(g.Average(r => (double)r.Calificacion), 1),
+                alojamientoId = g.Key,
+                promedio      = g.Average(r => (double)r.Calificacion),
                 totalResenas  = g.Count()
             })
-            .OrderByDescending(x => x.promedio)
             .ToListAsync();
 
-        return Ok(ratings);
+        // Obtener nombres de alojamientos
+        var ids = ratingsRaw.Select(r => r.alojamientoId).ToList();
+        var nombres = await _db.Alojamientos
+            .Where(a => ids.Contains(a.Id))
+            .ToDictionaryAsync(a => a.Id, a => a.Nombre);
+
+        var result = ratingsRaw
+            .OrderByDescending(r => r.promedio)
+            .Select(r => new
+            {
+                r.alojamientoId,
+                nombre = nombres.TryGetValue(r.alojamientoId, out var n) ? n : "Desconocido",
+                promedio = Math.Round(r.promedio, 1),
+                r.totalResenas
+            });
+
+        return Ok(result);
     }
 
     // ── Visitantes nuevos por mes ─────────────────────────────────────────
