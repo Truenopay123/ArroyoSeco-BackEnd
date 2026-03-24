@@ -204,15 +204,30 @@ public class PagosController : ControllerBase
         }
         catch (MercadoPagoApiException ex)
         {
+            var apiMessage = ex.ApiError?.Message ?? ex.Message;
+            var errorDetail = ex.ApiError?.Errors != null 
+                ? string.Join("; ", ex.ApiError.Errors.Select(e => e.ToString()))
+                : apiMessage;
+
             _logger.LogError(ex,
-                "Error API Mercado Pago al crear preferencia. ReservaId={ReservaId}. ApiMessage={ApiMessage}",
+                "Error API Mercado Pago al crear preferencia. ReservaId={ReservaId}. Status={Status}. ApiMessage={ApiMessage}",
                 dto.ReservaId,
-                ex.ApiError?.Message);
+                ex.ApiError?.Status,
+                errorDetail);
+
+            // Provide specific guidance based on error type
+            var message = apiMessage?.Contains("invalid", StringComparison.OrdinalIgnoreCase) ?? false
+                ? "La preferencia de pago es inválida. Verifica que back_urls sean HTTPS públicas, CurrencyId sea válido (ARS), y el token sea de una cuenta habilitada para producción."
+                : apiMessage?.Contains("unauthorized", StringComparison.OrdinalIgnoreCase) ?? false
+                ? "Token de Mercado Pago inválido o expirado. Verifica que uses APP_USR-... (producción) en lugar de TEST-... (desarrollo)."
+                : $"Mercado Pago rechazó la preferencia: {apiMessage}";
 
             return StatusCode(502, new
             {
-                message = "Mercado Pago rechazo la preferencia. Revisa back_urls y credenciales de la cuenta.",
-                detail = ex.ApiError?.Message ?? ex.Message
+                message = message,
+                detail = errorDetail,
+                transactionId = dto.ReservaId,
+                timestamp = DateTime.UtcNow
             });
         }
         catch (Exception ex)
@@ -221,7 +236,9 @@ public class PagosController : ControllerBase
             return StatusCode(502, new
             {
                 message = "No se pudo iniciar el pago con Mercado Pago. Verifica AccessToken, credenciales de prueba y estado de la cuenta.",
-                detail = ex.Message
+                detail = ex.InnerException?.Message ?? ex.Message,
+                transactionId = dto.ReservaId,
+                timestamp = DateTime.UtcNow
             });
         }
     }
