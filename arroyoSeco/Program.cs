@@ -76,10 +76,14 @@ builder.Services.AddCors(p =>
 {
     p.AddPolicy(CorsPolicy, policy =>
     {
-        // En producción, permitir dominio de Vercel
+        // En produccion, permitir dominio frontend configurado.
         if (builder.Environment.IsProduction())
         {
-            policy.WithOrigins("https://arroyosecoservices.vercel.app")
+            var configuredFrontend = builder.Configuration["AppUrls:FrontendBaseUrl"]
+                ?? Environment.GetEnvironmentVariable("APP_FRONTEND_BASE_URL")
+                ?? "https://alojamientosarroyoseco.vercel.app";
+
+            policy.WithOrigins(configuredFrontend.TrimEnd('/'), "https://alojamientosarroyoseco.vercel.app")
                   .AllowAnyHeader()
                   .AllowAnyMethod()
                   .AllowCredentials();
@@ -96,7 +100,7 @@ builder.Services.AddCors(p =>
     });
 });
 
-// Obtener connection string desde DATABASE_URL (Render) o ConnectionStrings__DefaultConnection (local)
+// Obtener connection string desde DATABASE_URL (Railway) o ConnectionStrings__DefaultConnection (local)
 var databaseUrl = Environment.GetEnvironmentVariable("DATABASE_URL");
 string connectionString;
 
