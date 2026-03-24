@@ -1,7 +1,7 @@
 # Deploy guide - Vercel (Front) + Railway (API + PostgreSQL)
 
 ## URLs de produccion
-- Frontend: https://alojamientosarroyoseco.vercel.app
+- Frontend: https://turismoarroyoseco.vercel.app
 - Backend: https://arroyoseco-api-production-fcae.up.railway.app
 
 ## Cambios ya preparados en el codigo
@@ -30,7 +30,7 @@ Estas variables son necesarias para operar en produccion de forma correcta y seg
 - `Jwt__Key=<clave-larga-y-secreta-min-32-chars>`
 - `Jwt__Issuer=arroyoSeco`
 - `Jwt__Audience=arroyoSeco-client`
-- `AppUrls__FrontendBaseUrl=https://alojamientosarroyoseco.vercel.app`
+- `AppUrls__FrontendBaseUrl=https://turismoarroyoseco.vercel.app`
 - `AppUrls__BackendBaseUrl=https://arroyoseco-api-production-fcae.up.railway.app`
 - `EMAIL_SMTP_HOST=smtp-relay.brevo.com`
 - `EMAIL_SMTP_PORT=587`
@@ -81,3 +81,20 @@ Si cambias de backend en el futuro, actualiza:
 - No uses claves de prueba en produccion (JWT, Brevo, Mercado Pago).
 - Si no configuras `MercadoPago__WebhookSecret`, el backend acepta webhook sin validar firma (funciona, pero menos seguro).
 - `DATABASE_URL` es la fuente principal en Railway y tiene prioridad en la app.
+
+## 6) Troubleshooting Railway (error SDK / DLL no existe)
+Si Railway muestra mensajes como:
+- `The application 'out/arroyoSeco.API.dll' does not exist`
+- `No .NET SDKs were found`
+
+No suele ser falta real de SDK. Casi siempre es comando de inicio incorrecto.
+
+Configura en Railway:
+- Root Directory: `ArroyoSeco-BackEnd`
+- Builder: `Nixpacks`
+- Build Command: `dotnet publish arroyoSeco/arroyoSeco.API.csproj -c Release -o /app/out`
+- Start Command: `dotnet /app/out/arroyoSeco.API.dll`
+
+Importante:
+- Si tienes Start Command personalizado en Railway UI (por ejemplo `dotnet out/arroyoSeco.API.dll`), elimínalo o cámbialo por el comando absoluto.
+- El mensaje `No .NET SDKs were found` aparece también cuando el DLL de arranque no existe. No implica necesariamente que falte instalar .NET.

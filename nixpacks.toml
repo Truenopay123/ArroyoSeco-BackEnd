@@ -11,4 +11,4 @@ cmds = [
 ]
 
 [start]
-cmd = "cd /app/out && dotnet arroyoSeco.API.dll"
+cmd = "dotnet /app/out/arroyoSeco.API.dll"

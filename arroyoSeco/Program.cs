@@ -81,9 +81,9 @@ builder.Services.AddCors(p =>
         {
             var configuredFrontend = builder.Configuration["AppUrls:FrontendBaseUrl"]
                 ?? Environment.GetEnvironmentVariable("APP_FRONTEND_BASE_URL")
-                ?? "https://alojamientosarroyoseco.vercel.app";
+                ?? "https://turismoarroyoseco.vercel.app";
 
-            policy.WithOrigins(configuredFrontend.TrimEnd('/'), "https://alojamientosarroyoseco.vercel.app")
+            policy.WithOrigins(configuredFrontend.TrimEnd('/'), "https://turismoarroyoseco.vercel.app")
                   .AllowAnyHeader()
                   .AllowAnyMethod()
                   .AllowCredentials();
