@@ -1,8 +1,11 @@
 using System;
 using System.Net;
+using System.Net.Http;
 using System.Net.Mail;
 using System.Net.Sockets;
 using System.IO;
+using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -17,15 +20,18 @@ public class SmtpEmailService : IEmailService
     private readonly EmailOptions _options;
     private readonly ILogger<SmtpEmailService> _logger;
     private readonly IHostEnvironment _env;
+    private readonly IHttpClientFactory _httpClientFactory;
 
     public SmtpEmailService(
         IOptions<EmailOptions> options,
         ILogger<SmtpEmailService> logger,
-        IHostEnvironment env)
+        IHostEnvironment env,
+        IHttpClientFactory httpClientFactory)
     {
         _options = options.Value;
         _logger = logger;
         _env = env;
+        _httpClientFactory = httpClientFactory;
     }
 
     public async Task<bool> SendEmailAsync(
@@ -96,6 +102,11 @@ public class SmtpEmailService : IEmailService
                 string.Join(',', portsToTry),
                 _options.EnableSsl);
 
+            if (await TrySendViaBrevoApiAsync(toEmail, subject, htmlBody, ct))
+            {
+                return true;
+            }
+
             return await TryWriteOutboxAsync(toEmail, subject, htmlBody, ct);
         }
         catch (Exception ex)
@@ -164,6 +175,78 @@ public class SmtpEmailService : IEmailService
         }
 
         return ex is SocketException socket && socket.SocketErrorCode == SocketError.TimedOut;
+    }
+
+    private async Task<bool> TrySendViaBrevoApiAsync(
+        string toEmail,
+        string subject,
+        string htmlBody,
+        CancellationToken ct)
+    {
+        var apiKey = Environment.GetEnvironmentVariable("BREVO_API_KEY")
+            ?? Environment.GetEnvironmentVariable("EMAIL_BREVO_API_KEY");
+
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            _logger.LogWarning("Brevo API fallback omitido: BREVO_API_KEY no configurado.");
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(_options.FromEmail))
+        {
+            _logger.LogWarning("Brevo API fallback omitido: FromEmail no configurado.");
+            return false;
+        }
+
+        try
+        {
+            var payload = new Dictionary<string, object?>
+            {
+                ["sender"] = new Dictionary<string, string>
+                {
+                    ["name"] = string.IsNullOrWhiteSpace(_options.FromName) ? "Arroyo Seco" : _options.FromName,
+                    ["email"] = _options.FromEmail
+                },
+                ["to"] = new[]
+                {
+                    new Dictionary<string, string>
+                    {
+                        ["email"] = toEmail
+                    }
+                },
+                ["subject"] = subject,
+                ["htmlContent"] = htmlBody
+            };
+
+            var json = JsonSerializer.Serialize(payload);
+            using var req = new HttpRequestMessage(HttpMethod.Post, "https://api.brevo.com/v3/smtp/email")
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            };
+            req.Headers.Add("api-key", apiKey);
+            req.Headers.Add("accept", "application/json");
+
+            var client = _httpClientFactory.CreateClient(nameof(SmtpEmailService));
+            using var response = await client.SendAsync(req, ct);
+
+            if (response.IsSuccessStatusCode)
+            {
+                _logger.LogInformation("Correo enviado por Brevo API a {ToEmail}", toEmail);
+                return true;
+            }
+
+            var body = await response.Content.ReadAsStringAsync(ct);
+            _logger.LogError(
+                "Brevo API respondió error {StatusCode}. Body: {Body}",
+                (int)response.StatusCode,
+                body);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error usando Brevo API fallback para {ToEmail}", toEmail);
+            return false;
+        }
     }
 
     private async Task<bool> TryWriteOutboxAsync(string toEmail, string subject, string htmlBody, CancellationToken ct)

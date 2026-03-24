@@ -48,6 +48,7 @@ else
 }
 
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddHttpClient();
 
 // Capturar excepciones globales (si algo revienta mostrar log)
 AppDomain.CurrentDomain.UnhandledException += (s, e) =>
