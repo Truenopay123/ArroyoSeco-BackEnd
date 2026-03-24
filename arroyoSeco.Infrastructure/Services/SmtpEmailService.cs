@@ -50,17 +50,28 @@ public class SmtpEmailService : IEmailService
         {
             _logger.LogInformation("Iniciando envío de correo a {ToEmail} - Asunto: {Subject}", toEmail, subject);
 
+            if (string.IsNullOrWhiteSpace(_options.FromEmail))
+            {
+                _logger.LogError("Email remitente no está configurado (FromEmail vacío)");
+                return false;
+            }
+
+            if (_options.PreferBrevoApi && HasBrevoApiKey())
+            {
+                if (await TrySendViaBrevoApiAsync(toEmail, subject, htmlBody, ct))
+                {
+                    return true;
+                }
+
+                _logger.LogWarning("Brevo API preferida falló; se intentará SMTP como fallback.");
+            }
+
             if (string.IsNullOrWhiteSpace(_options.SmtpHost) || _options.SmtpPort <= 0)
             {
                 _logger.LogWarning("Configuración SMTP inválida: host/puerto requeridos");
                 return await TryWriteOutboxAsync(toEmail, subject, htmlBody, ct);
             }
 
-            if (string.IsNullOrWhiteSpace(_options.FromEmail))
-            {
-                _logger.LogError("Email remitente no está configurado (FromEmail vacío)");
-                return false;
-            }
             var portsToTry = GetPortsToTry();
             Exception? lastError = null;
 
@@ -175,6 +186,13 @@ public class SmtpEmailService : IEmailService
         }
 
         return ex is SocketException socket && socket.SocketErrorCode == SocketError.TimedOut;
+    }
+
+    private static bool HasBrevoApiKey()
+    {
+        var apiKey = Environment.GetEnvironmentVariable("BREVO_API_KEY")
+            ?? Environment.GetEnvironmentVariable("EMAIL_BREVO_API_KEY");
+        return !string.IsNullOrWhiteSpace(apiKey);
     }
 
     private async Task<bool> TrySendViaBrevoApiAsync(

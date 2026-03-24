@@ -293,6 +293,12 @@ builder.Services.PostConfigure<EmailOptions>(o =>
     {
         o.UsePort2525Fallback = usePort2525Fallback;
     }
+
+    var preferBrevoApiEnv = Environment.GetEnvironmentVariable("EMAIL_PREFER_BREVO_API");
+    if (bool.TryParse(preferBrevoApiEnv, out var preferBrevoApi))
+    {
+        o.PreferBrevoApi = preferBrevoApi;
+    }
 });
 
 var app = builder.Build();

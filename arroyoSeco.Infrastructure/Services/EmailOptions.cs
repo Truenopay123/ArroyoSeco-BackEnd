@@ -7,6 +7,7 @@ public class EmailOptions
     public bool EnableSsl { get; set; } = true;
     public int TimeoutMs { get; set; } = 30000;
     public bool UsePort2525Fallback { get; set; } = true;
+    public bool PreferBrevoApi { get; set; } = true;
     public string SmtpUsername { get; set; } = null!;
     public string SmtpPassword { get; set; } = null!;
     public string FromEmail { get; set; } = null!;
