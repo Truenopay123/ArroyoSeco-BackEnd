@@ -2,7 +2,7 @@
 
 ## URLs de produccion
 - Frontend: https://alojamientosarroyoseco.vercel.app
-- Backend: https://arroyoseco-api-production.up.railway.app
+- Backend: https://arroyoseco-production.up.railway.app
 
 ## Cambios ya preparados en el codigo
 - CORS de backend en produccion habilitado para el frontend de Vercel.
@@ -15,7 +15,7 @@
 - Proyecto: Railway
 - Runtime: Nixpacks (ya existe `nixpacks.toml`)
 - Puerto: Railway inyecta `PORT` automaticamente
-- Dominio: `https://arroyoseco-api-production.up.railway.app`
+- Dominio: `https://arroyoseco-production.up.railway.app`
 
 ### Base de datos
 - Crear plugin PostgreSQL en Railway.
@@ -31,7 +31,7 @@ Estas variables son necesarias para operar en produccion de forma correcta y seg
 - `Jwt__Issuer=arroyoSeco`
 - `Jwt__Audience=arroyoSeco-client`
 - `AppUrls__FrontendBaseUrl=https://alojamientosarroyoseco.vercel.app`
-- `AppUrls__BackendBaseUrl=https://arroyoseco-api-production.up.railway.app`
+- `AppUrls__BackendBaseUrl=https://arroyoseco-production.up.railway.app`
 - `EMAIL_SMTP_HOST=smtp-relay.brevo.com`
 - `EMAIL_SMTP_PORT=587`
 - `EMAIL_ENABLE_SSL=true`
@@ -72,8 +72,8 @@ Si cambias de backend en el futuro, actualiza:
 - Probar flujo de pago de Mercado Pago (crear preferencia y webhook).
 
 ## 4) Verificaciones rapidas post-deploy
-- Salud API: `GET https://arroyoseco-api-production.up.railway.app/health`
-- Swagger: `https://arroyoseco-api-production.up.railway.app/swagger`
+- Salud API: `GET https://arroyoseco-production.up.railway.app/health`
+- Swagger: `https://arroyoseco-production.up.railway.app/swagger`
 - CORS desde front productivo: login/register sin errores de navegador.
 - Correo Brevo: prueba de confirmacion y recuperacion de password.
 
