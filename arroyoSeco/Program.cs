@@ -344,9 +344,7 @@ app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 
-// Endpoint de salud para verificar que no se cay�
 app.MapGet("/health", () => Results.Ok("OK"));
-
 app.MapControllers();
 
 // Aplicar migraciones automáticamente en producción

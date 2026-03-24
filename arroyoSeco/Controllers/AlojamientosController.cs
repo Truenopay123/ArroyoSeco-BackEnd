@@ -95,7 +95,7 @@ public class AlojamientosController : ControllerBase
     {
         var a = await _db.Alojamientos.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (a is null) return NotFound();
-
+        
         a.Nombre = dto.Nombre;
         a.Ubicacion = dto.Ubicacion;
         a.Latitud = dto.Latitud;
