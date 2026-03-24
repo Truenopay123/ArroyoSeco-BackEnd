@@ -1,6 +1,7 @@
 using System;
 using System.Net;
 using System.Net.Mail;
+using System.Net.Sockets;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -54,36 +55,115 @@ public class SmtpEmailService : IEmailService
                 _logger.LogError("Email remitente no está configurado (FromEmail vacío)");
                 return false;
             }
+            var portsToTry = GetPortsToTry();
+            Exception? lastError = null;
 
-            using var message = new MailMessage
+            foreach (var port in portsToTry)
             {
-                From = new MailAddress(_options.FromEmail, _options.FromName),
-                Subject = subject,
-                Body = htmlBody,
-                IsBodyHtml = true
-            };
-            message.To.Add(new MailAddress(toEmail));
+                try
+                {
+                    await SendUsingPortAsync(port, toEmail, subject, htmlBody, ct);
+                    _logger.LogInformation(
+                        "Correo enviado exitosamente a {ToEmail} usando {Host}:{Port}",
+                        toEmail,
+                        _options.SmtpHost,
+                        port);
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
 
-            using var client = new SmtpClient(_options.SmtpHost, _options.SmtpPort)
-            {
-                EnableSsl = _options.EnableSsl,
-                UseDefaultCredentials = false
-            };
+                    if (IsTimeoutException(ex) && portsToTry.Count > 1)
+                    {
+                        _logger.LogWarning(
+                            ex,
+                            "Timeout SMTP en {Host}:{Port}. Se intentará puerto alternativo.",
+                            _options.SmtpHost,
+                            port);
+                        continue;
+                    }
 
-            if (!string.IsNullOrWhiteSpace(_options.SmtpUsername) && !string.IsNullOrWhiteSpace(_options.SmtpPassword))
-            {
-                client.Credentials = new NetworkCredential(_options.SmtpUsername, _options.SmtpPassword);
+                    break;
+                }
             }
 
-            await client.SendMailAsync(message, ct);
-            _logger.LogInformation("Correo enviado exitosamente a {ToEmail}", toEmail);
-            return true;
+            _logger.LogError(
+                lastError,
+                "Excepción enviando correo a {ToEmail}. Host={Host}, PuertosIntentados={Ports}, SSL={EnableSsl}",
+                toEmail,
+                _options.SmtpHost,
+                string.Join(',', portsToTry),
+                _options.EnableSsl);
+
+            return await TryWriteOutboxAsync(toEmail, subject, htmlBody, ct);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Excepción enviando correo a {ToEmail}", toEmail);
             return await TryWriteOutboxAsync(toEmail, subject, htmlBody, ct);
         }
+    }
+
+    private async Task SendUsingPortAsync(
+        int port,
+        string toEmail,
+        string subject,
+        string htmlBody,
+        CancellationToken ct)
+    {
+        using var message = new MailMessage
+        {
+            From = new MailAddress(_options.FromEmail, _options.FromName),
+            Subject = subject,
+            Body = htmlBody,
+            IsBodyHtml = true
+        };
+        message.To.Add(new MailAddress(toEmail));
+
+        using var client = new SmtpClient(_options.SmtpHost, port)
+        {
+            EnableSsl = _options.EnableSsl,
+            UseDefaultCredentials = false,
+            Timeout = _options.TimeoutMs > 0 ? _options.TimeoutMs : 30000
+        };
+
+        if (!string.IsNullOrWhiteSpace(_options.SmtpUsername) && !string.IsNullOrWhiteSpace(_options.SmtpPassword))
+        {
+            client.Credentials = new NetworkCredential(_options.SmtpUsername, _options.SmtpPassword);
+        }
+
+        await client.SendMailAsync(message, ct);
+    }
+
+    private List<int> GetPortsToTry()
+    {
+        var ports = new List<int> { _options.SmtpPort };
+
+        if (_options.UsePort2525Fallback && _options.SmtpPort == 587)
+        {
+            ports.Add(2525);
+        }
+
+        return ports.Where(p => p > 0).Distinct().ToList();
+    }
+
+    private static bool IsTimeoutException(Exception ex)
+    {
+        if (ex is SmtpException smtpEx)
+        {
+            if (smtpEx.InnerException is SocketException socketEx && socketEx.SocketErrorCode == SocketError.TimedOut)
+            {
+                return true;
+            }
+
+            if (smtpEx.Message.Contains("timed out", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return ex is SocketException socket && socket.SocketErrorCode == SocketError.TimedOut;
     }
 
     private async Task<bool> TryWriteOutboxAsync(string toEmail, string subject, string htmlBody, CancellationToken ct)

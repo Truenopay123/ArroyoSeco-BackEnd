@@ -280,6 +280,18 @@ builder.Services.PostConfigure<EmailOptions>(o =>
     {
         o.EnableSsl = enableSsl;
     }
+
+    var timeoutMsEnv = Environment.GetEnvironmentVariable("EMAIL_TIMEOUT_MS");
+    if (int.TryParse(timeoutMsEnv, out var timeoutMs) && timeoutMs > 0)
+    {
+        o.TimeoutMs = timeoutMs;
+    }
+
+    var fallback2525Env = Environment.GetEnvironmentVariable("EMAIL_USE_PORT_2525_FALLBACK");
+    if (bool.TryParse(fallback2525Env, out var usePort2525Fallback))
+    {
+        o.UsePort2525Fallback = usePort2525Fallback;
+    }
 });
 
 var app = builder.Build();
