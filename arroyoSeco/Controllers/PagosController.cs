@@ -141,11 +141,14 @@ public class PagosController : ControllerBase
                 ? null
                 : currencyIdRaw.Trim().ToUpperInvariant();
 
+            // Redondear a 2 decimales para evitar errores de validación en el checkout de MP
+            var unitPrice = Math.Round(reserva.Total / nights, 2);
+
             var item = new PreferenceItemRequest
             {
                 Title = $"Reserva {reserva.Alojamiento?.Nombre ?? "Alojamiento"} - {reserva.Folio}",
                 Quantity = nights,
-                UnitPrice = reserva.Total / nights
+                UnitPrice = unitPrice
             };
 
             // Si no se define moneda, Mercado Pago usa la moneda de la cuenta/país del vendedor.
@@ -153,6 +156,10 @@ public class PagosController : ControllerBase
             {
                 item.CurrencyId = currencyId;
             }
+
+            // Obtener email del comprador para que MP habilite el botón Pagar con tarjetas guardadas
+            var comprador = await _userManager.FindByIdAsync(reserva.ClienteId);
+            var payerEmail = comprador?.Email;
 
             var request = new PreferenceRequest
             {
@@ -169,6 +176,11 @@ public class PagosController : ControllerBase
                 },
                 NotificationUrl = $"{backendBase}/api/pagos/webhook"
             };
+
+            if (!string.IsNullOrWhiteSpace(payerEmail))
+            {
+                request.Payer = new PreferencePayerRequest { Email = payerEmail };
+            }
 
             // Auto return falla en entornos locales/no-https. Se habilita solo con URL pública HTTPS.
             var canUseAutoReturn = frontendUri.Scheme == Uri.UriSchemeHttps && !frontendUri.IsLoopback;
