@@ -59,11 +59,20 @@ public class PagosController : ControllerBase
         if (User.IsInRole("Cliente") && reserva.ClienteId != _current.UserId)
             return Forbid();
 
+        if (await CancelarReservaSiPendienteExpiradaAsync(reserva))
+        {
+            return Conflict(new
+            {
+                message = "La reserva pendiente expiró por falta de pago. Crea una nueva reserva para continuar."
+            });
+        }
+
         var accessToken = _config["MercadoPago:AccessToken"]
             ?? Environment.GetEnvironmentVariable("MP_ACCESS_TOKEN");
 
         if (string.IsNullOrWhiteSpace(accessToken))
         {
+            await CancelarReservaPendienteAsync(reserva, "No se pudo crear preferencia: AccessToken faltante.");
             _logger.LogError("MercadoPago AccessToken no configurado. ReservaId={ReservaId}", dto.ReservaId);
             return StatusCode(500, new
             {
@@ -74,6 +83,7 @@ public class PagosController : ControllerBase
         if (!accessToken.StartsWith("TEST-", StringComparison.OrdinalIgnoreCase)
             && !accessToken.StartsWith("APP_USR-", StringComparison.OrdinalIgnoreCase))
         {
+            await CancelarReservaPendienteAsync(reserva, "No se pudo crear preferencia: formato de AccessToken inválido.");
             _logger.LogError("MercadoPago AccessToken con formato invalido. ReservaId={ReservaId}", dto.ReservaId);
             return StatusCode(500, new
             {
@@ -96,6 +106,7 @@ public class PagosController : ControllerBase
             if (!Uri.TryCreate(frontendBase, UriKind.Absolute, out var frontendUri)
                 || (frontendUri.Scheme != Uri.UriSchemeHttp && frontendUri.Scheme != Uri.UriSchemeHttps))
             {
+                await CancelarReservaPendienteAsync(reserva, "No se pudo crear preferencia: FrontendBaseUrl inválida.");
                 _logger.LogError("AppUrls:FrontendBaseUrl invalido para Mercado Pago: {FrontendBaseUrl}", frontendBase);
                 return StatusCode(500, new
                 {
@@ -111,6 +122,7 @@ public class PagosController : ControllerBase
             if (!Uri.TryCreate(backendBase, UriKind.Absolute, out var backendUri)
                 || (backendUri.Scheme != Uri.UriSchemeHttp && backendUri.Scheme != Uri.UriSchemeHttps))
             {
+                await CancelarReservaPendienteAsync(reserva, "No se pudo crear preferencia: BackendBaseUrl inválida.");
                 _logger.LogError("AppUrls:BackendBaseUrl invalido para Mercado Pago: {BackendBaseUrl}", backendBase);
                 return StatusCode(500, new
                 {
@@ -125,6 +137,7 @@ public class PagosController : ControllerBase
             // Mercado Pago exige back_urls con success absoluto cuando AutoReturn = approved.
             if (!Uri.TryCreate(successUrl, UriKind.Absolute, out _))
             {
+                await CancelarReservaPendienteAsync(reserva, "No se pudo crear preferencia: successUrl inválida.");
                 _logger.LogError("URL success invalida para Mercado Pago: {SuccessUrl}", successUrl);
                 return StatusCode(500, new
                 {
@@ -216,6 +229,7 @@ public class PagosController : ControllerBase
         }
         catch (MercadoPagoApiException ex)
         {
+            await CancelarReservaPendienteAsync(reserva, "Mercado Pago rechazó la preferencia.");
             var apiMessage = ex.ApiError?.Message ?? ex.Message;
             var errorDetail = ex.ApiError?.Errors != null 
                 ? string.Join("; ", ex.ApiError.Errors.Select(e => e.ToString()))
@@ -244,6 +258,7 @@ public class PagosController : ControllerBase
         }
         catch (Exception ex)
         {
+            await CancelarReservaPendienteAsync(reserva, "Excepción al crear preferencia de pago.");
             _logger.LogError(ex, "Error creando preferencia de Mercado Pago. ReservaId={ReservaId}", dto.ReservaId);
             return StatusCode(502, new
             {
@@ -381,10 +396,31 @@ public class PagosController : ControllerBase
         if (User.IsInRole("Oferente") && reserva.Alojamiento?.OferenteId != _current.UserId)
             return Forbid();
 
+        if (await CancelarReservaSiPendienteExpiradaAsync(reserva))
+        {
+            estado = "expirado";
+        }
+
+        var estadoNorm = (estado ?? string.Empty).Trim().ToLowerInvariant();
+        var retornoRechazado = estadoNorm.Contains("rechaz") || estadoNorm.Contains("rejected") || estadoNorm.Contains("cancel");
+
         var pago = await _db.Pagos
             .Where(p => p.ReservaId == reservaId)
             .OrderByDescending(p => p.FechaCreacion)
             .FirstOrDefaultAsync();
+
+        if (retornoRechazado && pago is not null && !string.Equals(pago.Estado, "Aprobado", StringComparison.OrdinalIgnoreCase))
+        {
+            pago.Estado = estadoNorm.Contains("cancel") ? "Cancelado" : "Rechazado";
+            pago.FechaActualizacion = DateTime.UtcNow;
+
+            if (string.Equals(reserva.Estado, "Pendiente", StringComparison.OrdinalIgnoreCase))
+            {
+                reserva.Estado = "Cancelada";
+            }
+
+            await _db.SaveChangesAsync();
+        }
 
         return Ok(new
         {
@@ -451,7 +487,7 @@ public class PagosController : ControllerBase
             reserva.Estado = pago.Estado switch
             {
                 "Aprobado" => "Confirmada",
-                "Rechazado" => "Pendiente",
+                "Rechazado" => "Cancelada",
                 "Cancelado" => "Cancelada",
                 _ => reserva.Estado
             };
@@ -531,5 +567,54 @@ public class PagosController : ControllerBase
         var computed = Convert.ToHexString(hash).ToLowerInvariant();
 
         return string.Equals(computed, v1, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private int GetReservaPendienteExpiracionMinutos()
+    {
+        var raw = _config["MercadoPago:PendingReservationExpirationMinutes"];
+        return int.TryParse(raw, out var minutes) && minutes > 0 ? minutes : 30;
+    }
+
+    private async Task<bool> CancelarReservaSiPendienteExpiradaAsync(Reserva reserva)
+    {
+        if (!string.Equals(reserva.Estado, "Pendiente", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var minutos = GetReservaPendienteExpiracionMinutos();
+        if (DateTime.UtcNow < reserva.FechaReserva.AddMinutes(minutos))
+            return false;
+
+        var ultimoPago = await _db.Pagos
+            .Where(p => p.ReservaId == reserva.Id)
+            .OrderByDescending(p => p.FechaActualizacion ?? p.FechaCreacion)
+            .FirstOrDefaultAsync();
+
+        if (string.Equals(ultimoPago?.Estado, "Aprobado", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        await CancelarReservaPendienteAsync(reserva, $"Reserva pendiente expirada tras {minutos} minutos sin pago aprobado.");
+        return true;
+    }
+
+    private async Task CancelarReservaPendienteAsync(Reserva reserva, string motivo)
+    {
+        if (!string.Equals(reserva.Estado, "Pendiente", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        reserva.Estado = "Cancelada";
+
+        var ultimoPago = await _db.Pagos
+            .Where(p => p.ReservaId == reserva.Id)
+            .OrderByDescending(p => p.FechaActualizacion ?? p.FechaCreacion)
+            .FirstOrDefaultAsync();
+
+        if (ultimoPago is not null && !string.Equals(ultimoPago.Estado, "Aprobado", StringComparison.OrdinalIgnoreCase))
+        {
+            ultimoPago.Estado = "Cancelado";
+            ultimoPago.FechaActualizacion = DateTime.UtcNow;
+        }
+
+        await _db.SaveChangesAsync();
+        _logger.LogWarning("Reserva cancelada automáticamente. ReservaId={ReservaId}. Motivo={Motivo}", reserva.Id, motivo);
     }
 }

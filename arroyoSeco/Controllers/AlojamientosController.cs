@@ -1,8 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.SignalR;
 using arroyoSeco.Application.Common.Interfaces;
 using arroyoSeco.Application.Features.Alojamiento.Commands.Crear;
+using arroyoSeco.Hubs;
 using AlojamientoEntity = arroyoSeco.Domain.Entities.Alojamientos.Alojamiento;
 
 namespace arroyoSeco.Controllers;
@@ -14,12 +16,18 @@ public class AlojamientosController : ControllerBase
     private readonly IAppDbContext _db;
     private readonly CrearAlojamientoCommandHandler _crear;
     private readonly ICurrentUserService _current;
+    private readonly IHubContext<PriceUpdateHub> _priceHub;
 
-    public AlojamientosController(IAppDbContext db, CrearAlojamientoCommandHandler crear, ICurrentUserService current)
+    public AlojamientosController(
+        IAppDbContext db,
+        CrearAlojamientoCommandHandler crear,
+        ICurrentUserService current,
+        IHubContext<PriceUpdateHub> priceHub)
     {
         _db = db;
         _crear = crear;
         _current = current;
+        _priceHub = priceHub;
     }
 
     // P�blico
@@ -86,15 +94,31 @@ public class AlojamientosController : ControllerBase
         return CreatedAtAction(nameof(GetById), new { id }, id);
     }
 
-    public record ActualizarAlojamientoDto(string Nombre, string Ubicacion, double? Latitud, double? Longitud, string? Direccion, int MaxHuespedes, int Habitaciones, int Banos, decimal PrecioPorNoche, string? FotoPrincipal, List<string>? Amenidades);
+    public record ActualizarAlojamientoDto(
+        string Nombre,
+        string Ubicacion,
+        double? Latitud,
+        double? Longitud,
+        string? Direccion,
+        int MaxHuespedes,
+        int Habitaciones,
+        int Banos,
+        decimal PrecioPorNoche,
+        string? FotoPrincipal,
+        List<string>? FotosUrls,
+        List<string>? Amenidades);
 
     // Solo Oferente
     [Authorize(Roles = "Oferente")]
     [HttpPut("{id:int}")]
     public async Task<IActionResult> Update(int id, [FromBody] ActualizarAlojamientoDto dto, CancellationToken ct)
     {
-        var a = await _db.Alojamientos.FirstOrDefaultAsync(x => x.Id == id, ct);
+        var a = await _db.Alojamientos
+            .Include(x => x.Fotos)
+            .FirstOrDefaultAsync(x => x.Id == id, ct);
         if (a is null) return NotFound();
+
+        var precioAnterior = a.PrecioPorNoche;
         
         a.Nombre = dto.Nombre;
         a.Ubicacion = dto.Ubicacion;
@@ -106,6 +130,21 @@ public class AlojamientosController : ControllerBase
         a.Banos = dto.Banos;
         a.PrecioPorNoche = dto.PrecioPorNoche;
         a.FotoPrincipal = dto.FotoPrincipal;
+
+        var fotosExtras = (dto.FotosUrls ?? new List<string>())
+            .Where(url => !string.IsNullOrWhiteSpace(url))
+            .Select(url => url.Trim())
+            .Where(url => !string.Equals(url, dto.FotoPrincipal?.Trim(), StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        a.Fotos.Clear();
+        a.Fotos.AddRange(fotosExtras.Select((url, idx) => new Domain.Entities.Alojamientos.FotoAlojamiento
+        {
+            Url = url,
+            Orden = idx + 1
+        }));
+
         a.Amenidades = dto.Amenidades?
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Select(x => x.Trim())
@@ -113,6 +152,21 @@ public class AlojamientosController : ControllerBase
             .ToList() ?? new List<string>();
 
         await _db.SaveChangesAsync(ct);
+
+        if (precioAnterior != a.PrecioPorNoche)
+        {
+            await _priceHub.Clients
+                .Group(PriceUpdateHub.GetAlojamientoGroupName(a.Id))
+                .SendAsync(
+                    PriceUpdateHub.PriceUpdatedEvent,
+                    new
+                    {
+                        alojamientoId = a.Id,
+                        precioNuevo = a.PrecioPorNoche
+                    },
+                    ct);
+        }
+
         return NoContent();
     }
 

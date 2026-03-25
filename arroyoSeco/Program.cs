@@ -23,6 +23,7 @@ using System.Text.Json.Serialization;
 using System.Runtime.ExceptionServices;
 using System.Threading.RateLimiting;
 using arroyoSeco.Services;
+using arroyoSeco.Hubs;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -224,6 +225,7 @@ builder.Services.AddControllers()
         o.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
         o.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase; // ← Agregar camelCase
     });
+builder.Services.AddSignalR();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
@@ -346,6 +348,7 @@ app.UseAuthorization();
 
 app.MapGet("/health", () => Results.Ok("OK"));
 app.MapControllers();
+app.MapHub<PriceUpdateHub>("/hubs/prices");
 
 // Aplicar migraciones automáticamente en producción
 using (var scope = app.Services.CreateScope())

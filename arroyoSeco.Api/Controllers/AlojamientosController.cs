@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.SignalR;
 using arroyoSeco.Infrastructure.Data;
 using arroyoSeco.Application.Features.Alojamiento.Commands.Crear;
+using arroyoSeco.Hubs;
 
 namespace arroyoSeco.Api.Controllers;
 
@@ -11,11 +13,16 @@ public class AlojamientosController : ControllerBase
 {
     private readonly AppDbContext _ctx;
     private readonly CrearAlojamientoCommandHandler _crear;
+    private readonly IHubContext<PriceUpdateHub> _priceHub;
 
-    public AlojamientosController(AppDbContext ctx, CrearAlojamientoCommandHandler crear)
+    public AlojamientosController(
+        AppDbContext ctx,
+        CrearAlojamientoCommandHandler crear,
+        IHubContext<PriceUpdateHub> priceHub)
     {
         _ctx = ctx;
         _crear = crear;
+        _priceHub = priceHub;
     }
 
     [HttpGet]
@@ -52,6 +59,7 @@ public class AlojamientosController : ControllerBase
     {
         var a = await _ctx.Alojamientos.Include(x => x.Fotos).FirstOrDefaultAsync(x => x.Id == id, ct);
         if (a == null) return NotFound();
+        var precioAnterior = a.PrecioPorNoche;
         a.Nombre = dto.Nombre;
         a.Ubicacion = dto.Ubicacion;
         a.MaxHuespedes = dto.MaxHuespedes;
@@ -62,6 +70,21 @@ public class AlojamientosController : ControllerBase
         a.Fotos.Clear();
         a.Fotos.AddRange(dto.FotosUrls.Select((u, i) => new Domain.Entities.Alojamientos.FotoAlojamiento { Url = u, Orden = i + 1 }));
         await _ctx.SaveChangesAsync(ct);
+
+        if (precioAnterior != a.PrecioPorNoche)
+        {
+            await _priceHub.Clients
+                .Group(PriceUpdateHub.GetAlojamientoGroupName(a.Id))
+                .SendAsync(
+                    PriceUpdateHub.PriceUpdatedEvent,
+                    new
+                    {
+                        alojamientoId = a.Id,
+                        precioNuevo = a.PrecioPorNoche
+                    },
+                    ct);
+        }
+
         return NoContent();
     }
 

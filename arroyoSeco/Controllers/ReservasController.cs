@@ -417,6 +417,11 @@ public class ReservasController : ControllerBase
     {
         var now = DateTime.UtcNow; // comparaci�n directa, evita CONVERT(date)
 
+        var clienteObjetivo = !string.IsNullOrWhiteSpace(clienteId)
+            ? clienteId
+            : (User.IsInRole("Cliente") ? _current.UserId : null);
+        await ExpirarReservasPendientesDelClienteAsync(clienteObjetivo, ct);
+
         IQueryable<Reserva> q = _db.Reservas
             .AsNoTracking()
             .Include(r => r.Alojamiento)
@@ -526,6 +531,8 @@ public class ReservasController : ControllerBase
         var esAdmin = User.IsInRole("Admin");
         if (!(esMismoCliente || esAdmin)) return Forbid();
 
+        await ExpirarReservasPendientesDelClienteAsync(clienteId, ct);
+
         var items = await _db.Reservas
             .AsNoTracking()
             .Include(r => r.Alojamiento)
@@ -555,6 +562,51 @@ public class ReservasController : ControllerBase
         });
         return Ok(result);
     }
+
+    private async Task ExpirarReservasPendientesDelClienteAsync(string? clienteId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(clienteId)) return;
+
+        const int minutosExpiracion = 30;
+        var limite = DateTime.UtcNow.AddMinutes(-minutosExpiracion);
+
+        var candidatas = await _db.Reservas
+            .Where(r => r.ClienteId == clienteId && r.Estado == "Pendiente" && r.FechaReserva <= limite)
+            .ToListAsync(ct);
+
+        if (!candidatas.Any()) return;
+
+        var idsReserva = candidatas.Select(r => r.Id).ToArray();
+        var pagos = await _db.Pagos
+            .Where(p => idsReserva.Contains(p.ReservaId))
+            .OrderByDescending(p => p.FechaActualizacion ?? p.FechaCreacion)
+            .ToListAsync(ct);
+
+        var ultimoPagoPorReserva = pagos
+            .GroupBy(p => p.ReservaId)
+            .ToDictionary(g => g.Key, g => g.First());
+
+        var cambios = false;
+        foreach (var reserva in candidatas)
+        {
+            ultimoPagoPorReserva.TryGetValue(reserva.Id, out var pago);
+            if (string.Equals(pago?.Estado, "Aprobado", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            reserva.Estado = "Cancelada";
+            cambios = true;
+
+            if (pago is not null && !string.Equals(pago.Estado, "Aprobado", StringComparison.OrdinalIgnoreCase))
+            {
+                pago.Estado = "Cancelado";
+                pago.FechaActualizacion = DateTime.UtcNow;
+            }
+        }
+
+        if (cambios)
+            await _db.SaveChangesAsync(ct);
+    }
+
     private async Task<Dictionary<string,string>> MapearNombres(IEnumerable<string> ids)
     {
         var dic = new Dictionary<string,string>();
