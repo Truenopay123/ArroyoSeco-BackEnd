@@ -69,4 +69,4 @@ if [ "$ATTEMPTS" -ge "$MAX_ATTEMPTS" ]; then
 fi
 
 echo "[startup] Iniciando API .NET en puerto ${PORT:-8080}"
-exec dotnet /app/out/arroyoSeco.API.dll
+exec dotnet /app/arroyoSeco.API.dll
