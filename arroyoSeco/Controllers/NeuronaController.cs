@@ -6,7 +6,7 @@ namespace arroyoSeco.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-[Authorize(Roles = "Admin,Oferente")]
+[Authorize]
 public class NeuronaController : ControllerBase
 {
     private readonly INeuronaCambioService _neuronaCambioService;
