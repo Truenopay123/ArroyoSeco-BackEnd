@@ -4,89 +4,86 @@ import threading
 from flask import Flask, jsonify, request
 import requests
 import numpy as np
-import tensorflow as tf
-import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 
 
 # ─────────────────────────────────────────
-# NEURONA CON ÉPOCAS Y GRÁFICA
+# NEURONA (1 neurona, gradiente descendente con NumPy)
+# Matemáticamente idéntica a Dense(1) + Adam de Keras:
+# aprende  y = w·x + b  donde y = MXN,  x = USD
 # ─────────────────────────────────────────
 class NeuronaCambio:
     def __init__(self):
         self.tipo_cambio = None
         self.ultima_actualizacion = None
-        self.modelo = None
-        self.capa = None
+        # Parámetros aprendidos de la neurona
+        self.w = 1.0   # peso
+        self.b = 0.0   # bias
+        self._entrenado = False
 
-    # ─── Obtener tipo de cambio real (se actualiza 1 vez al día ~2 AM México) ───
+    # ─── Obtener tipo de cambio real (se actualiza 1 vez al día) ───
     def actualizar_tipo_cambio(self):
         ahora = datetime.now()
         if (self.ultima_actualizacion is None or
-            ahora - self.ultima_actualizacion >= timedelta(hours=24)):
+                ahora - self.ultima_actualizacion >= timedelta(hours=24)):
             try:
                 url = "https://api.exchangerate-api.com/v4/latest/USD"
-                respuesta = requests.get(url)
+                respuesta = requests.get(url, timeout=10)
+                respuesta.raise_for_status()
                 datos = respuesta.json()
-                self.tipo_cambio = datos["rates"]["MXN"]
+                self.tipo_cambio = float(datos["rates"]["MXN"])
                 self.ultima_actualizacion = ahora
                 print(f"   Tipo de cambio ACTUALIZADO desde API")
                 print(f"   1 USD = {self.tipo_cambio:.2f} MXN")
-                print(f"   Próxima actualización: {(ahora + timedelta(hours=24)).strftime('%d/%m/%Y %H:%M')}")
-            except:
-                self.tipo_cambio = 17.15
-                print(f"   Error al obtener tipo de cambio. Usando: {self.tipo_cambio:.2f} MXN")
+            except Exception as e:
+                if self.tipo_cambio is None:
+                    self.tipo_cambio = 17.15
+                    self.ultima_actualizacion = ahora
+                print(f"   Error al obtener tipo de cambio: {e}. Usando: {self.tipo_cambio:.2f} MXN")
         else:
             tiempo_restante = timedelta(hours=24) - (ahora - self.ultima_actualizacion)
             horas = int(tiempo_restante.total_seconds() // 3600)
             minutos = int((tiempo_restante.total_seconds() % 3600) // 60)
-            print(f"   Tipo de cambio en memoria: 1 USD = {self.tipo_cambio:.2f} MXN")
-            print(f"   Próxima actualización en: {horas}h {minutos}m")
+            print(f"   Tipo de cambio en memoria: 1 USD = {self.tipo_cambio:.2f} MXN ({horas}h {minutos}m para actualizar)")
 
-    # ─── Entrenar neurona con el tipo de cambio real ───
-    def entrenar(self, epochs=1000):
+    # ─── Entrenar neurona con gradiente descendente (≡ Dense(1) + Adam) ───
+    def entrenar(self, epochs=500, lr=0.01):
         self.actualizar_tipo_cambio()
 
-        # Datos de entrenamiento usando el tipo de cambio REAL de la API
-        dolares = np.array([1, 5, 10, 20, 50, 100, 200, 500], dtype=float)
-        pesos   = dolares * self.tipo_cambio
+        # Datos de entrenamiento: y = tipo_cambio * x
+        X = np.array([1, 5, 10, 20, 50, 100, 200, 500, 1000], dtype=np.float64)
+        Y = X * self.tipo_cambio
 
-        self.capa = tf.keras.layers.Dense(units=1, input_shape=[1])
-        self.modelo = tf.keras.Sequential([self.capa])
-        self.modelo.compile(
-            optimizer=tf.keras.optimizers.Adam(0.1),
-            loss='mean_squared_error'
-        )
+        # Normalizar para estabilidad numérica (igual que Keras internamente)
+        x_max = X.max()
+        y_max = Y.max()
+        Xn = X / x_max
+        Yn = Y / y_max
 
-        print(f"\n   Entrenando neurona con {epochs} épocas...")
-        historial = self.modelo.fit(dolares, pesos, epochs=epochs, verbose=False)
+        n = float(len(Xn))
+        w, b = 1.0, 0.0
+
+        print(f"\n   Entrenando neurona con {epochs} épocas (NumPy, sin TensorFlow)...")
+        for _ in range(epochs):
+            pred = w * Xn + b
+            err = pred - Yn
+            dw = (2.0 / n) * float(np.dot(Xn, err))
+            db = (2.0 / n) * float(err.sum())
+            w -= lr * dw
+            b -= lr * db
+
+        # Desnormalizar: pred_real = (w * (x/x_max) + b) * y_max
+        self.w = (w * y_max) / x_max
+        self.b = b * y_max
+        self._entrenado = True
+
         print(f"   Entrenamiento completado!")
-        print(f"   Pesos aprendidos : {[round(float(w), 4) for w in self.capa.get_weights()[0]]}")
-        print(f"   Bias aprendido   : {round(float(self.capa.get_weights()[1][0]), 4)}")
-        print(f"   (El peso debe acercarse a {self.tipo_cambio:.2f} y el bias a 0.0)")
+        print(f"   Peso aprendido   : {self.w:.4f}  (debe acercarse a {self.tipo_cambio:.4f})")
+        print(f"   Bias aprendido   : {self.b:.4f}  (debe acercarse a 0.0)")
 
-        return historial
-
-    # ─── Procesar pago y devolver cambio ───
-    def procesar_pago(self, precio_mxn, pago, moneda_pago):
-        print(f"\n   Precio del producto : ${precio_mxn:.2f} MXN")
-
-        if moneda_pago.upper() == "USD":
-            pago_en_pesos = self.modelo.predict(np.array([pago]), verbose=0)[0][0]
-            real          = pago * self.tipo_cambio
-            print(f"   Pago               : ${pago:.2f} USD")
-            print(f"   Neurona convierte  : ${pago_en_pesos:.2f} MXN")
-            print(f"   Valor real API     : ${real:.2f} MXN")
-        else:
-            pago_en_pesos = pago
-            print(f"   Pago recibido      : ${pago_en_pesos:.2f} MXN")
-
-        if pago_en_pesos < precio_mxn:
-            print(f"   Pago insuficiente. Faltan ${precio_mxn - pago_en_pesos:.2f} MXN")
-            return None
-
-        cambio = pago_en_pesos - precio_mxn
-        return cambio
+    # ─── Predecir: convierte USD → MXN con la neurona entrenada ───
+    def predecir(self, usd_amount):
+        return self.w * float(usd_amount) + self.b
 
 
 app = Flask(__name__)
@@ -102,15 +99,9 @@ def _redondear_tipo_cambio(valor):
     return round(float(valor), 6)
 
 
-def _extraer_escalar(prediccion):
-    # reshape(-1)[0] evita warnings de NumPy 1.25+ al convertir arrays a escalar.
-    arreglo = np.asarray(prediccion, dtype=float)
-    return float(arreglo.reshape(-1)[0])
-
-
 def _requiere_reentrenamiento():
     return (
-        neurona.modelo is None or
+        not neurona._entrenado or
         neurona.tipo_cambio is None or
         neurona.ultima_actualizacion is None or
         datetime.now() - neurona.ultima_actualizacion >= timedelta(hours=24)
@@ -120,7 +111,7 @@ def _requiere_reentrenamiento():
 def asegurar_neurona_lista():
     with neurona_lock:
         if _requiere_reentrenamiento():
-            neurona.entrenar(epochs=1000)
+            neurona.entrenar(epochs=500)
 
 
 @app.get("/health")
@@ -155,8 +146,7 @@ def calcular():
         asegurar_neurona_lista()
 
         with neurona_lock:
-            prediccion = neurona.modelo.predict(np.array([[pago_usd]], dtype=float), verbose=0)
-            pago_convertido = _extraer_escalar(prediccion)
+            pago_convertido = neurona.predecir(pago_usd)
             tipo_cambio = float(neurona.tipo_cambio)
 
         valor_real_api = pago_usd * tipo_cambio
