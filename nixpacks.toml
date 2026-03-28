@@ -2,13 +2,17 @@
 dotnet = "8"
 
 [phases.setup]
-nixPkgs = ["dotnet-sdk_8"]
+nixPkgs = ["dotnet-sdk_8", "python311", "python311Packages.pip", "python311Packages.virtualenv"]
 
 [phases.build]
 cmds = [
     "dotnet restore arroyoSeco.sln",
-    "dotnet publish arroyoSeco/arroyoSeco.API.csproj -c Release -o /app/out"
+    "python -m venv /app/venv",
+    "/app/venv/bin/pip install --upgrade pip",
+    "/app/venv/bin/pip install --no-cache-dir -r neurona-service/requirements.txt",
+    "dotnet publish arroyoSeco/arroyoSeco.API.csproj -c Release -o /app/out",
+    "chmod +x start-with-neurona.sh"
 ]
 
 [start]
-cmd = "dotnet /app/out/arroyoSeco.API.dll"
+cmd = "/bin/sh /app/start-with-neurona.sh"

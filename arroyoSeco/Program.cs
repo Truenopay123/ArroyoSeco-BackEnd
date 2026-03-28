@@ -50,6 +50,30 @@ else
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddHttpClient();
+builder.Services.Configure<NeuronaServiceOptions>(builder.Configuration.GetSection("NeuronaService"));
+builder.Services.PostConfigure<NeuronaServiceOptions>(o =>
+{
+    o.BaseUrl = Environment.GetEnvironmentVariable("NEURONA_SERVICE_BASE_URL") ?? o.BaseUrl;
+
+    var timeoutEnv = Environment.GetEnvironmentVariable("NEURONA_SERVICE_TIMEOUT_SECONDS");
+    if (int.TryParse(timeoutEnv, out var timeoutSeconds) && timeoutSeconds > 0)
+    {
+        o.TimeoutSeconds = timeoutSeconds;
+    }
+});
+builder.Services.AddHttpClient<INeuronaCambioService, NeuronaCambioService>((serviceProvider, client) =>
+{
+    var options = serviceProvider
+        .GetRequiredService<Microsoft.Extensions.Options.IOptions<NeuronaServiceOptions>>()
+        .Value;
+
+    if (Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out var baseUri))
+    {
+        client.BaseAddress = baseUri;
+    }
+
+    client.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds > 0 ? options.TimeoutSeconds : 30);
+});
 
 // Capturar excepciones globales (si algo revienta mostrar log)
 AppDomain.CurrentDomain.UnhandledException += (s, e) =>
