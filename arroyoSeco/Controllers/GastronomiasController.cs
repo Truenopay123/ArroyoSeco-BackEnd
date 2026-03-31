@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authorization;
 using arroyoSeco.Application.Common.Interfaces;
 using arroyoSeco.Application.Features.Gastronomia.Commands.Crear;
-using EstablecimientoEntity = arroyoSeco.Domain.Entities.Gastronomia.Establecimiento;
+using arroyoSeco.Domain.Entities.Gastronomia;
 
 namespace arroyoSeco.Controllers;
 
@@ -32,8 +32,9 @@ public class GastronomiasController : ControllerBase
 
     [AllowAnonymous]
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<EstablecimientoEntity>>> List(CancellationToken ct)
+    public async Task<ActionResult<IEnumerable<Establecimiento>>> List(CancellationToken ct)
         => Ok(await _db.Establecimientos
+            .Include(e => e.Fotos.OrderBy(f => f.Orden))
             .Include(e => e.Menus)
             .Include(e => e.Mesas)
             .AsNoTracking()
@@ -42,10 +43,11 @@ public class GastronomiasController : ControllerBase
     // Endpoint para obtener establecimientos del oferente logueado
     [Authorize(Roles = "Oferente")]
     [HttpGet("mios")]
-    public async Task<ActionResult<IEnumerable<EstablecimientoEntity>>> GetMisEstablecimientos(CancellationToken ct)
+    public async Task<ActionResult<IEnumerable<Establecimiento>>> GetMisEstablecimientos(CancellationToken ct)
     {
         var establecimientos = await _db.Establecimientos
             .Where(e => e.OferenteId == _current.UserId)
+            .Include(e => e.Fotos.OrderBy(f => f.Orden))
             .Include(e => e.Menus)
             .ThenInclude(m => m.Items)
             .Include(e => e.Mesas)
@@ -57,9 +59,10 @@ public class GastronomiasController : ControllerBase
 
     [AllowAnonymous]
     [HttpGet("{id:int}")]
-    public async Task<ActionResult<EstablecimientoEntity>> GetById(int id, CancellationToken ct)
+    public async Task<ActionResult<Establecimiento>> GetById(int id, CancellationToken ct)
     {
         var e = await _db.Establecimientos
+            .Include(x => x.Fotos.OrderBy(f => f.Orden))
             .Include(x => x.Menus)
             .ThenInclude(m => m.Items)
             .Include(x => x.Mesas)
@@ -167,7 +170,9 @@ public class GastronomiasController : ControllerBase
     [HttpPut("{id:int}")]
     public async Task<IActionResult> Update(int id, [FromBody] UpdateEstablecimientoRequest request, CancellationToken ct)
     {
-        var est = await _db.Establecimientos.FirstOrDefaultAsync(e => e.Id == id, ct);
+        var est = await _db.Establecimientos
+            .Include(e => e.Fotos)
+            .FirstOrDefaultAsync(e => e.Id == id, ct);
         if (est == null) return NotFound(new { message = "Establecimiento no encontrado" });
         
         // Verificar que el oferente sea dueño
@@ -195,6 +200,24 @@ public class GastronomiasController : ControllerBase
         if (!string.IsNullOrWhiteSpace(request.FotoPrincipal))
             est.FotoPrincipal = request.FotoPrincipal;
 
+        // Actualizar fotos extras
+        if (request.FotosUrls != null)
+        {
+            var fotosExtras = request.FotosUrls
+                .Where(url => !string.IsNullOrWhiteSpace(url))
+                .Select(url => url.Trim())
+                .Where(url => !string.Equals(url, request.FotoPrincipal?.Trim(), StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            est.Fotos.Clear();
+            est.Fotos.AddRange(fotosExtras.Select((url, idx) => new FotoEstablecimiento
+            {
+                Url = url,
+                Orden = idx + 1
+            }));
+        }
+
         await _db.SaveChangesAsync(ct);
         
         return Ok(est);
@@ -216,6 +239,75 @@ public class GastronomiasController : ControllerBase
         
         return Ok(new { message = "Establecimiento eliminado correctamente" });
     }
+
+    // POST /api/Gastronomias/{id}/fotos
+    [Authorize(Roles = "Oferente")]
+    [HttpPost("{id:int}/fotos")]
+    public async Task<IActionResult> AgregarFotos(int id, [FromBody] AgregarFotosRequest request, CancellationToken ct)
+    {
+        var est = await _db.Establecimientos
+            .Include(e => e.Fotos)
+            .FirstOrDefaultAsync(e => e.Id == id, ct);
+        if (est == null) return NotFound(new { message = "Establecimiento no encontrado" });
+        if (est.OferenteId != _current.UserId) return Forbid();
+
+        var maxOrden = est.Fotos.Any() ? est.Fotos.Max(f => f.Orden) : 0;
+
+        var nuevas = (request.Urls ?? new List<string>())
+            .Where(url => !string.IsNullOrWhiteSpace(url))
+            .Select(url => url.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select((url, idx) => new FotoEstablecimiento
+            {
+                Url = url,
+                Orden = maxOrden + idx + 1
+            })
+            .ToList();
+
+        est.Fotos.AddRange(nuevas);
+        await _db.SaveChangesAsync(ct);
+
+        return Ok(est.Fotos.OrderBy(f => f.Orden));
+    }
+
+    // DELETE /api/Gastronomias/{id}/fotos/{fotoId}
+    [Authorize(Roles = "Oferente")]
+    [HttpDelete("{id:int}/fotos/{fotoId:int}")]
+    public async Task<IActionResult> EliminarFoto(int id, int fotoId, CancellationToken ct)
+    {
+        var est = await _db.Establecimientos.FirstOrDefaultAsync(e => e.Id == id, ct);
+        if (est == null) return NotFound(new { message = "Establecimiento no encontrado" });
+        if (est.OferenteId != _current.UserId) return Forbid();
+
+        var foto = await _db.FotosEstablecimiento.FirstOrDefaultAsync(f => f.Id == fotoId && f.EstablecimientoId == id, ct);
+        if (foto == null) return NotFound(new { message = "Foto no encontrada" });
+
+        _db.FotosEstablecimiento.Remove(foto);
+        await _db.SaveChangesAsync(ct);
+
+        return Ok(new { message = "Foto eliminada correctamente" });
+    }
+
+    // PUT /api/Gastronomias/{id}/fotos/reordenar
+    [Authorize(Roles = "Oferente")]
+    [HttpPut("{id:int}/fotos/reordenar")]
+    public async Task<IActionResult> ReordenarFotos(int id, [FromBody] ReordenarFotosRequest request, CancellationToken ct)
+    {
+        var est = await _db.Establecimientos
+            .Include(e => e.Fotos)
+            .FirstOrDefaultAsync(e => e.Id == id, ct);
+        if (est == null) return NotFound(new { message = "Establecimiento no encontrado" });
+        if (est.OferenteId != _current.UserId) return Forbid();
+
+        foreach (var item in request.FotoIds.Select((fotoId, idx) => new { fotoId, orden = idx + 1 }))
+        {
+            var foto = est.Fotos.FirstOrDefault(f => f.Id == item.fotoId);
+            if (foto != null) foto.Orden = item.orden;
+        }
+
+        await _db.SaveChangesAsync(ct);
+        return Ok(est.Fotos.OrderBy(f => f.Orden));
+    }
 }
 
 public record UpdateEstablecimientoRequest(
@@ -225,5 +317,10 @@ public record UpdateEstablecimientoRequest(
     double? Longitud,
     string? Direccion,
     string? Descripcion,
-    string? FotoPrincipal
+    string? FotoPrincipal,
+    List<string>? FotosUrls
 );
+
+public record AgregarFotosRequest(List<string> Urls);
+
+public record ReordenarFotosRequest(List<int> FotoIds);

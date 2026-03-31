@@ -30,24 +30,40 @@ public class EstadisticasController : ControllerBase
                 _authDb.Roles.Any(r => r.Id == ur.RoleId && r.Name == "Cliente")));
 
         var totalReservas  = await _db.Reservas.CountAsync();
+        var totalReservasGastronomia = await _db.ReservasGastronomia.CountAsync();
         var reservasActivas = await _db.Reservas.CountAsync(r => r.Estado == "Confirmada");
+        var reservasGastronomiaActivas = await _db.ReservasGastronomia.CountAsync(r => r.Estado == "Confirmada");
         var ingresoTotal   = await _db.Reservas
             .Where(r => r.Estado == "Confirmada" || r.Estado == "Completada")
             .SumAsync(r => (decimal?)r.Total) ?? 0;
+        var ingresoTotalGastronomia = await _db.ReservasGastronomia
+            .Where(r => r.Estado == "Confirmada" || r.Estado == "Completada")
+            .SumAsync(r => (decimal?)r.Total) ?? 0;
 
-        var totalResenas   = await _db.Resenas.CountAsync(r => r.Estado == "Aprobada");
+        var totalResenas   = await _db.Resenas.CountAsync(r => r.Estado == "publicada");
         var promedioGlobal = totalResenas > 0
-            ? await _db.Resenas.Where(r => r.Estado == "Aprobada").AverageAsync(r => (double)r.Calificacion)
+            ? await _db.Resenas.Where(r => r.Estado == "publicada").AverageAsync(r => (double)r.Calificacion)
+            : 0;
+
+        var totalResenasGastronomia = await _db.ResenasGastronomia.CountAsync(r => r.Estado == "publicada");
+        var promedioGlobalGastronomia = totalResenasGastronomia > 0
+            ? await _db.ResenasGastronomia.Where(r => r.Estado == "publicada").AverageAsync(r => (double)r.Calificacion)
             : 0;
 
         return Ok(new
         {
             totalVisitantes,
             totalReservas,
+            totalReservasGastronomia,
             reservasActivas,
+            reservasGastronomiaActivas,
             ingresoTotal,
+            ingresoTotalGastronomia,
+            ingresoTotalGeneral = ingresoTotal + ingresoTotalGastronomia,
             totalResenas,
-            promedioGlobal = Math.Round(promedioGlobal, 1)
+            promedioGlobal = Math.Round(promedioGlobal, 1),
+            totalResenasGastronomia,
+            promedioGlobalGastronomia = Math.Round(promedioGlobalGastronomia, 1)
         });
     }
 
@@ -157,7 +173,7 @@ public class EstadisticasController : ControllerBase
     public async Task<IActionResult> RatingAlojamientos()
     {
         var ratingsRaw = await _db.Resenas
-            .Where(r => r.Estado == "Aprobada")
+            .Where(r => r.Estado == "publicada")
             .GroupBy(r => r.AlojamientoId)
             .Select(g => new
             {
@@ -167,7 +183,6 @@ public class EstadisticasController : ControllerBase
             })
             .ToListAsync();
 
-        // Obtener nombres de alojamientos
         var ids = ratingsRaw.Select(r => r.alojamientoId).ToList();
         var nombres = await _db.Alojamientos
             .Where(a => ids.Contains(a.Id))
@@ -184,6 +199,66 @@ public class EstadisticasController : ControllerBase
             });
 
         return Ok(result);
+    }
+
+    // ── Rating promedio por establecimiento gastronomía ───────────────────
+
+    [HttpGet("rating-establecimientos")]
+    public async Task<IActionResult> RatingEstablecimientos()
+    {
+        var ratingsRaw = await _db.ResenasGastronomia
+            .Where(r => r.Estado == "publicada")
+            .GroupBy(r => r.EstablecimientoId)
+            .Select(g => new
+            {
+                establecimientoId = g.Key,
+                promedio = g.Average(r => (double)r.Calificacion),
+                totalResenas = g.Count()
+            })
+            .ToListAsync();
+
+        var ids = ratingsRaw.Select(r => r.establecimientoId).ToList();
+        var nombres = await _db.Establecimientos
+            .Where(e => ids.Contains(e.Id))
+            .ToDictionaryAsync(e => e.Id, e => e.Nombre);
+
+        var result = ratingsRaw
+            .OrderByDescending(r => r.promedio)
+            .Select(r => new
+            {
+                r.establecimientoId,
+                nombre = nombres.TryGetValue(r.establecimientoId, out var n) ? n : "Desconocido",
+                promedio = Math.Round(r.promedio, 1),
+                r.totalResenas
+            });
+
+        return Ok(result);
+    }
+
+    // ── Tendencia de reservas gastronomía por mes ─────────────────────────
+
+    [HttpGet("reservas-gastronomia-por-mes")]
+    public async Task<IActionResult> ReservasGastronomiaPorMes([FromQuery] int anio = 0)
+    {
+        if (anio == 0) anio = DateTime.UtcNow.Year;
+
+        var reservas = await _db.ReservasGastronomia
+            .Where(r => r.FechaReserva.Year == anio)
+            .ToListAsync();
+
+        var porMes = reservas
+            .GroupBy(r => r.FechaReserva.Month)
+            .Select(g => new
+            {
+                mes = g.Key,
+                mesNombre = new System.Globalization.CultureInfo("es-AR").DateTimeFormat.GetMonthName(g.Key),
+                cantidad = g.Count(),
+                ingresos = g.Sum(r => r.Total)
+            })
+            .OrderBy(x => x.mes)
+            .ToList();
+
+        return Ok(porMes);
     }
 
     // ── Visitantes nuevos por mes ─────────────────────────────────────────

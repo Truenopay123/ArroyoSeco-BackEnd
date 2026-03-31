@@ -21,12 +21,14 @@ public class CrearReservaGastronomiaCommandHandler
     private readonly IAppDbContext _context;
     private readonly ICurrentUserService _current;
     private readonly INotificationService _notifications;
+    private readonly IFolioGenerator _folio;
 
-    public CrearReservaGastronomiaCommandHandler(IAppDbContext context, ICurrentUserService current, INotificationService notifications)
+    public CrearReservaGastronomiaCommandHandler(IAppDbContext context, ICurrentUserService current, INotificationService notifications, IFolioGenerator folio)
     {
         _context = context;
         _current = current;
         _notifications = notifications;
+        _folio = folio;
     }
 
     public async Task<int> Handle(CrearReservaGastronomiaCommand request, CancellationToken ct = default)
@@ -45,8 +47,11 @@ public class CrearReservaGastronomiaCommandHandler
             if (!mesa.Disponible) throw new InvalidOperationException("Mesa no disponible");
         }
 
+        var folio = await _folio.NextReservaFolioAsync(ct);
+
         var reserva = new ReservaGastronomia
         {
+            Folio = folio,
             UsuarioId = _current.UserId,
             EstablecimientoId = est.Id,
             MesaId = mesa?.Id,

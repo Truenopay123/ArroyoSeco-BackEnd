@@ -446,6 +446,58 @@ using (var scope = app.Services.CreateScope())
             ALTER TABLE ""Reservas""
             ADD COLUMN IF NOT EXISTS ""NumeroHuespedes"" integer NOT NULL DEFAULT 1;");
 
+        // Nuevas columnas en ReservasGastronomia
+        appDbContext.Database.ExecuteSqlRaw(@"
+            ALTER TABLE ""ReservasGastronomia""
+            ADD COLUMN IF NOT EXISTS ""Folio"" text NULL,
+            ADD COLUMN IF NOT EXISTS ""FechaReserva"" timestamp with time zone NOT NULL DEFAULT now(),
+            ADD COLUMN IF NOT EXISTS ""ComprobanteUrl"" varchar(500) NULL;");
+
+        // Tabla de fotos de establecimientos
+        appDbContext.Database.ExecuteSqlRaw(@"
+            CREATE TABLE IF NOT EXISTS ""FotosEstablecimiento"" (
+                ""Id"" serial PRIMARY KEY,
+                ""EstablecimientoId"" integer NOT NULL REFERENCES ""Establecimientos""(""Id"") ON DELETE CASCADE,
+                ""Url"" text NOT NULL,
+                ""Orden"" integer NOT NULL DEFAULT 0
+            );");
+
+        // Tabla de reseñas de gastronomía
+        appDbContext.Database.ExecuteSqlRaw(@"
+            CREATE TABLE IF NOT EXISTS ""ResenasGastronomia"" (
+                ""Id"" serial PRIMARY KEY,
+                ""EstablecimientoId"" integer NOT NULL REFERENCES ""Establecimientos""(""Id"") ON DELETE CASCADE,
+                ""ReservaGastronomiaId"" integer NOT NULL UNIQUE REFERENCES ""ReservasGastronomia""(""Id"") ON DELETE CASCADE,
+                ""ClienteId"" text NOT NULL,
+                ""Calificacion"" integer NOT NULL,
+                ""Comentario"" varchar(2000) NOT NULL,
+                ""Estado"" text NOT NULL DEFAULT 'publicada',
+                ""MotivoReporte"" text NULL,
+                ""FechaReporte"" timestamp with time zone NULL,
+                ""OfferenteIdQueReporto"" text NULL,
+                ""FechaCreacion"" timestamp with time zone NOT NULL DEFAULT now()
+            );");
+
+        // Tabla de pagos de gastronomía
+        appDbContext.Database.ExecuteSqlRaw(@"
+            CREATE TABLE IF NOT EXISTS ""PagosGastronomia"" (
+                ""Id"" serial PRIMARY KEY,
+                ""ReservaGastronomiaId"" integer NOT NULL REFERENCES ""ReservasGastronomia""(""Id"") ON DELETE CASCADE,
+                ""MercadoPagoPreferenceId"" text NULL,
+                ""MercadoPagoPaymentId"" text NULL,
+                ""Estado"" text NOT NULL DEFAULT 'Pendiente',
+                ""Monto"" numeric(18,2) NOT NULL DEFAULT 0,
+                ""MetodoPago"" text NULL,
+                ""FechaCreacion"" timestamp with time zone NOT NULL DEFAULT now(),
+                ""FechaActualizacion"" timestamp with time zone NULL
+            );");
+
+        // Generar folios para reservas gastronomía existentes que no tengan
+        appDbContext.Database.ExecuteSqlRaw(@"
+            UPDATE ""ReservasGastronomia""
+            SET ""Folio"" = 'RES-' || EXTRACT(YEAR FROM ""FechaReserva"")::text || '-' || LEFT(REPLACE(gen_random_uuid()::text, '-', ''), 8)
+            WHERE ""Folio"" IS NULL OR ""Folio"" = '';");
+
         Console.WriteLine("=== Migrations applied successfully");
     }
     catch (Exception ex)

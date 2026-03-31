@@ -26,6 +26,9 @@ public class AppDbContext : DbContext, IAppDbContext
     public DbSet<MenuItem> MenuItems => Set<MenuItem>();
     public DbSet<Mesa> Mesas => Set<Mesa>();
     public DbSet<ReservaGastronomia> ReservasGastronomia => Set<ReservaGastronomia>();
+    public DbSet<FotoEstablecimiento> FotosEstablecimiento => Set<FotoEstablecimiento>();
+    public DbSet<ResenaGastronomia> ResenasGastronomia => Set<ResenaGastronomia>();
+    public DbSet<PagoGastronomia> PagosGastronomia => Set<PagoGastronomia>();
     public DbSet<Notificacion> Notificaciones => Set<Notificacion>();
     public DbSet<SolicitudOferente> SolicitudesOferente => Set<SolicitudOferente>();
     public DbSet<Resena> Resenas => Set<Resena>();
@@ -80,6 +83,12 @@ public class AppDbContext : DbContext, IAppDbContext
             .OnDelete(DeleteBehavior.Cascade);
 
         b.Entity<Establecimiento>()
+            .HasMany(e => e.Fotos)
+            .WithOne(f => f.Establecimiento)
+            .HasForeignKey(f => f.EstablecimientoId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        b.Entity<Establecimiento>()
             .HasMany(e => e.Mesas)
             .WithOne(ms => ms.Establecimiento)
             .HasForeignKey(ms => ms.EstablecimientoId)
@@ -107,12 +116,15 @@ public class AppDbContext : DbContext, IAppDbContext
         b.Entity<ReservaGastronomia>(e =>
         {
             e.HasKey(r => r.Id);
+            e.HasIndex(r => r.Folio).IsUnique();
+            e.Property(r => r.Folio).HasMaxLength(50);
             e.Property(r => r.UsuarioId).IsRequired();
             e.Property(r => r.EstablecimientoId).IsRequired();
             e.Property(r => r.Fecha).IsRequired();
             e.Property(r => r.Estado).IsRequired().HasDefaultValue("Pendiente");
             e.Property(r => r.NumeroPersonas).IsRequired();
             e.Property(r => r.Total).HasColumnType("numeric(18,2)").HasDefaultValue(0);
+            e.Property(r => r.ComprobanteUrl).HasMaxLength(500);
 
             e.HasOne(r => r.Establecimiento)
                 .WithMany(est => est.Reservas)
@@ -123,6 +135,39 @@ public class AppDbContext : DbContext, IAppDbContext
                 .WithMany()
                 .HasForeignKey(r => r.MesaId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // Reseñas de Gastronomía
+        b.Entity<ResenaGastronomia>(e =>
+        {
+            e.HasIndex(r => r.ReservaGastronomiaId).IsUnique();
+            e.HasIndex(r => r.EstablecimientoId);
+            e.Property(r => r.Estado).HasDefaultValue("publicada");
+            e.Property(r => r.FechaCreacion).HasDefaultValueSql("now()");
+            e.Property(r => r.Comentario).HasMaxLength(2000);
+
+            e.HasOne(r => r.Establecimiento)
+                .WithMany()
+                .HasForeignKey(r => r.EstablecimientoId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasOne(r => r.ReservaGastronomia)
+                .WithMany()
+                .HasForeignKey(r => r.ReservaGastronomiaId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Pagos de Gastronomía
+        b.Entity<PagoGastronomia>(e =>
+        {
+            e.Property(p => p.Monto).HasColumnType("numeric(18,2)").HasDefaultValue(0);
+            e.Property(p => p.Estado).HasDefaultValue("Pendiente");
+            e.Property(p => p.FechaCreacion).HasDefaultValueSql("now()");
+
+            e.HasOne(p => p.ReservaGastronomia)
+                .WithMany()
+                .HasForeignKey(p => p.ReservaGastronomiaId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         b.Entity<Notificacion>().HasIndex(n => n.UsuarioId);

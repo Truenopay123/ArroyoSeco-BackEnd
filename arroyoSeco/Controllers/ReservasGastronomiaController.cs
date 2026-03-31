@@ -2,9 +2,12 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Options;
 using arroyoSeco.Application.Common.Interfaces;
 using arroyoSeco.Application.Features.Gastronomia.Commands.Crear;
 using arroyoSeco.Domain.Entities.Usuarios;
+using arroyoSeco.Domain.Entities.Gastronomia;
+using arroyoSeco.Infrastructure.Storage;
 
 namespace arroyoSeco.Controllers;
 
@@ -18,19 +21,22 @@ public class ReservasGastronomiaController : ControllerBase
     private readonly CrearReservaGastronomiaCommandHandler _crear;
     private readonly IEmailService _email;
     private readonly UserManager<ApplicationUser> _userManager;
+    private readonly string _comprobantesPath;
 
     public ReservasGastronomiaController(
         IAppDbContext db,
         ICurrentUserService current,
         CrearReservaGastronomiaCommandHandler crear,
         IEmailService email,
-        UserManager<ApplicationUser> userManager)
+        UserManager<ApplicationUser> userManager,
+        IOptions<StorageOptions> storage)
     {
         _db = db;
         _current = current;
         _crear = crear;
         _email = email;
         _userManager = userManager;
+        _comprobantesPath = storage.Value.ComprobantesPath;
     }
 
     // POST /api/ReservasGastronomia
@@ -57,7 +63,8 @@ public class ReservasGastronomiaController : ControllerBase
             
             return CreatedAtAction(nameof(GetByIdGastronomia), new { id = reserva.Id }, new 
             { 
-                reserva.Id, 
+                reserva.Id,
+                reserva.Folio,
                 reserva.EstablecimientoId, 
                 reserva.Fecha, 
                 reserva.NumeroPersonas, 
@@ -94,6 +101,7 @@ public class ReservasGastronomiaController : ControllerBase
         return Ok(new
         {
             reserva.Id,
+            reserva.Folio,
             reserva.EstablecimientoId,
             EstablecimientoNombre = reserva.Establecimiento?.Nombre,
             reserva.MesaId,
@@ -102,8 +110,142 @@ public class ReservasGastronomiaController : ControllerBase
             reserva.Fecha,
             reserva.NumeroPersonas,
             reserva.Estado,
-            reserva.Total
+            reserva.Total,
+            reserva.FechaReserva,
+            reserva.ComprobanteUrl
         });
+    }
+
+    // GET /api/ReservasGastronomia/folio/{folio}
+    [HttpGet("folio/{folio}")]
+    public async Task<IActionResult> GetByFolio(string folio, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(folio)) return BadRequest("Folio requerido.");
+        var r = await _db.ReservasGastronomia.AsNoTracking()
+            .Include(x => x.Establecimiento)
+            .Include(x => x.Mesa)
+            .FirstOrDefaultAsync(x => x.Folio == folio, ct);
+        return r is null ? NotFound() : Ok(r);
+    }
+
+    // POST /api/ReservasGastronomia/{id}/comprobante
+    [HttpPost("{id:int}/comprobante")]
+    [RequestSizeLimit(50_000_000)]
+    public async Task<IActionResult> SubirComprobante(int id, IFormFile archivo, CancellationToken ct)
+    {
+        if (archivo is null || archivo.Length == 0) return BadRequest("Archivo requerido.");
+        var permitidos = new[] { "application/pdf", "image/jpeg", "image/png" };
+        if (!permitidos.Contains(archivo.ContentType))
+            return BadRequest("Formato no permitido (PDF/JPG/PNG).");
+
+        var r = await _db.ReservasGastronomia.FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (r is null) return NotFound();
+
+        var esCliente = r.UsuarioId == _current.UserId;
+        var esOferente = User.IsInRole("Oferente");
+        var esAdmin = User.IsInRole("Admin");
+        if (!(esCliente || esOferente || esAdmin))
+            return Forbid();
+
+        Directory.CreateDirectory(_comprobantesPath);
+        var ext = Path.GetExtension(archivo.FileName);
+        var safeFolio = string.Join("_", (r.Folio ?? "folio").Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries));
+        var fileName = $"{safeFolio}_{Guid.NewGuid():N}{ext}";
+        var fullPath = Path.Combine(_comprobantesPath, fileName);
+
+        try
+        {
+            await using var fs = new FileStream(fullPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true);
+            await archivo.CopyToAsync(fs, ct);
+            await fs.FlushAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, $"Error guardando archivo: {ex.Message}");
+        }
+
+        r.ComprobanteUrl = $"/comprobantes/{fileName}";
+        if (esCliente && r.Estado == "Pendiente")
+            r.Estado = "PagoEnRevision";
+
+        await _db.SaveChangesAsync(ct);
+        return Ok(new { r.Id, r.Folio, r.ComprobanteUrl, r.Estado });
+    }
+
+    // GET /api/ReservasGastronomia/{id}/comprobante
+    [HttpGet("{id:int}/comprobante")]
+    public async Task<IActionResult> DescargarComprobante(int id, CancellationToken ct)
+    {
+        var r = await _db.ReservasGastronomia.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (r is null) return NotFound(new { message = "Reserva no encontrada" });
+
+        if (string.IsNullOrWhiteSpace(r.ComprobanteUrl))
+            return NotFound(new { message = "La reserva no tiene comprobante" });
+
+        var fileName = r.ComprobanteUrl.Split('/').Last();
+        var filePath = Path.Combine(_comprobantesPath, fileName);
+
+        if (!System.IO.File.Exists(filePath))
+            return NotFound(new { message = "Archivo de comprobante no encontrado" });
+
+        var fileBytes = await System.IO.File.ReadAllBytesAsync(filePath, ct);
+        var contentType = fileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) 
+            ? "application/pdf" 
+            : "image/jpeg";
+
+        return File(fileBytes, contentType, fileName);
+    }
+
+    // GET /api/ReservasGastronomia/establecimiento/{establecimientoId}
+    [Authorize(Roles = "Admin,Oferente")]
+    [HttpGet("establecimiento/{establecimientoId:int}")]
+    public async Task<IActionResult> PorEstablecimiento(int establecimientoId, [FromQuery] string? estado, CancellationToken ct)
+    {
+        if (establecimientoId <= 0) return BadRequest("establecimientoId inválido");
+
+        if (User.IsInRole("Oferente"))
+        {
+            var esMio = await _db.Establecimientos
+                .AsNoTracking()
+                .AnyAsync(e => e.Id == establecimientoId && e.OferenteId == _current.UserId, ct);
+            if (!esMio) return Forbid();
+        }
+
+        var q = _db.ReservasGastronomia
+            .AsNoTracking()
+            .Where(r => r.EstablecimientoId == establecimientoId);
+
+        if (!string.IsNullOrWhiteSpace(estado))
+            q = q.Where(r => r.Estado == estado);
+
+        var items = await q
+            .Include(r => r.Establecimiento)
+            .Include(r => r.Mesa)
+            .OrderByDescending(r => r.FechaReserva)
+            .ToListAsync(ct);
+
+        var ids = items.Select(i => i.UsuarioId).Distinct().ToList();
+        var nombres = await MapearNombres(ids);
+
+        var result = items.Select(r => new
+        {
+            r.Id,
+            r.Folio,
+            r.EstablecimientoId,
+            EstablecimientoNombre = r.Establecimiento?.Nombre,
+            r.UsuarioId,
+            Huesped = nombres.TryGetValue(r.UsuarioId, out var nom) ? nom : r.UsuarioId,
+            r.MesaId,
+            MesaNumero = r.Mesa?.Numero,
+            r.Estado,
+            r.Fecha,
+            r.NumeroPersonas,
+            r.Total,
+            r.FechaReserva,
+            r.ComprobanteUrl
+        });
+
+        return Ok(result);
     }
 
     // GET /api/ReservasGastronomia/activas
@@ -129,6 +271,7 @@ public class ReservasGastronomiaController : ControllerBase
             return Ok(reservas.Select(r => new
             {
                 r.Id,
+                r.Folio,
                 r.EstablecimientoId,
                 EstablecimientoNombre = r.Establecimiento?.Nombre,
                 r.MesaId,
@@ -137,7 +280,10 @@ public class ReservasGastronomiaController : ControllerBase
                 r.Fecha,
                 r.NumeroPersonas,
                 r.Estado,
-                r.Total
+                r.Total,
+                r.FechaReserva,
+                r.ComprobanteUrl,
+                EnCurso = true
             }));
         }
 
@@ -157,6 +303,7 @@ public class ReservasGastronomiaController : ControllerBase
             return Ok(reservas.Select(r => new
             {
                 r.Id,
+                r.Folio,
                 r.EstablecimientoId,
                 EstablecimientoNombre = r.Establecimiento?.Nombre,
                 r.MesaId,
@@ -165,7 +312,10 @@ public class ReservasGastronomiaController : ControllerBase
                 r.Fecha,
                 r.NumeroPersonas,
                 r.Estado,
-                r.Total
+                r.Total,
+                r.FechaReserva,
+                r.ComprobanteUrl,
+                EnCurso = true
             }));
         }
 
@@ -193,6 +343,7 @@ public class ReservasGastronomiaController : ControllerBase
             return Ok(reservas.Select(r => new
             {
                 r.Id,
+                r.Folio,
                 r.EstablecimientoId,
                 EstablecimientoNombre = r.Establecimiento?.Nombre,
                 r.MesaId,
@@ -201,7 +352,10 @@ public class ReservasGastronomiaController : ControllerBase
                 r.Fecha,
                 r.NumeroPersonas,
                 r.Estado,
-                r.Total
+                r.Total,
+                r.FechaReserva,
+                r.ComprobanteUrl,
+                EnCurso = false
             }));
         }
 
@@ -219,6 +373,7 @@ public class ReservasGastronomiaController : ControllerBase
             return Ok(reservas.Select(r => new
             {
                 r.Id,
+                r.Folio,
                 r.EstablecimientoId,
                 EstablecimientoNombre = r.Establecimiento?.Nombre,
                 r.MesaId,
@@ -227,7 +382,10 @@ public class ReservasGastronomiaController : ControllerBase
                 r.Fecha,
                 r.NumeroPersonas,
                 r.Estado,
-                r.Total
+                r.Total,
+                r.FechaReserva,
+                r.ComprobanteUrl,
+                EnCurso = false
             }));
         }
 
@@ -332,7 +490,59 @@ public class ReservasGastronomiaController : ControllerBase
             }
         }
 
-        return Ok(new { reserva.Id, reserva.Estado });
+        return Ok(new { reserva.Id, reserva.Folio, reserva.Estado });
+    }
+
+    // GET /api/ReservasGastronomia/cliente/{clienteId}/historial
+    [HttpGet("cliente/{clienteId}/historial")]
+    public async Task<IActionResult> HistorialCliente(string clienteId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(clienteId)) return BadRequest("clienteId requerido");
+        var esMismoCliente = _current.UserId == clienteId;
+        var esAdmin = User.IsInRole("Admin");
+        if (!(esMismoCliente || esAdmin)) return Forbid();
+
+        var items = await _db.ReservasGastronomia
+            .AsNoTracking()
+            .Include(r => r.Establecimiento)
+            .Include(r => r.Mesa)
+            .Where(r => r.UsuarioId == clienteId)
+            .OrderByDescending(r => r.Fecha)
+            .ThenByDescending(r => r.FechaReserva)
+            .ToListAsync(ct);
+
+        var nombres = await MapearNombres(new[] { clienteId });
+        var nombre = nombres.TryGetValue(clienteId, out var n) ? n : clienteId;
+
+        var result = items.Select(r => new
+        {
+            r.Id,
+            r.Folio,
+            r.EstablecimientoId,
+            EstablecimientoNombre = r.Establecimiento?.Nombre,
+            r.UsuarioId,
+            Huesped = nombre,
+            r.MesaId,
+            MesaNumero = r.Mesa?.Numero,
+            r.Estado,
+            r.Fecha,
+            r.NumeroPersonas,
+            r.Total,
+            r.FechaReserva,
+            r.ComprobanteUrl
+        });
+        return Ok(result);
+    }
+
+    private async Task<Dictionary<string,string>> MapearNombres(IEnumerable<string> ids)
+    {
+        var dic = new Dictionary<string,string>();
+        foreach (var id in ids)
+        {
+            var u = await _userManager.FindByIdAsync(id);
+            dic[id] = u?.Email ?? u?.UserName ?? id;
+        }
+        return dic;
     }
 
     public record CambiarEstadoReservaGastronomiaDto(string Estado);

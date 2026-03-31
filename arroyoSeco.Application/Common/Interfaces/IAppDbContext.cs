@@ -25,6 +25,9 @@ public interface IAppDbContext
     DbSet<MenuItem> MenuItems { get; }
     DbSet<Mesa> Mesas { get; }
     DbSet<ReservaGastronomia> ReservasGastronomia { get; }
+    DbSet<FotoEstablecimiento> FotosEstablecimiento { get; }
+    DbSet<ResenaGastronomia> ResenasGastronomia { get; }
+    DbSet<PagoGastronomia> PagosGastronomia { get; }
     DbSet<Resena> Resenas { get; }
     DbSet<Pago> Pagos { get; }
     Task<int> SaveChangesAsync(CancellationToken ct = default);
