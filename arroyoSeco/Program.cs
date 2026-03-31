@@ -567,6 +567,43 @@ using (var scope = app.Services.CreateScope())
             }
         }
     }
+
+    // ── Crear admin de gastronomía ──
+    const string gastroEmail = "admingastronomia@gmail.com";
+    const string gastroPassword = "Admin123!";
+    var gastroUser = await userManager.FindByEmailAsync(gastroEmail);
+    if (gastroUser == null)
+    {
+        gastroUser = new ApplicationUser
+        {
+            UserName = gastroEmail,
+            Email = gastroEmail,
+            EmailConfirmed = true
+        };
+        var gastroResult = await userManager.CreateAsync(gastroUser, gastroPassword);
+        if (gastroResult.Succeeded)
+        {
+            await userManager.AddToRoleAsync(gastroUser, "Admin");
+            Console.WriteLine($"=== Admin gastronomía creado: {gastroEmail}");
+        }
+        else
+        {
+            Console.WriteLine($"=== Error creando admin gastronomía: {string.Join(", ", gastroResult.Errors.Select(e => e.Description))}");
+        }
+    }
+    else
+    {
+        var gastroRoles = await userManager.GetRolesAsync(gastroUser);
+        if (!gastroRoles.Contains("Admin"))
+        {
+            await userManager.AddToRoleAsync(gastroUser, "Admin");
+            Console.WriteLine($"=== Rol Admin asignado a: {gastroEmail}");
+        }
+        else
+        {
+            Console.WriteLine($"=== Admin gastronomía ya existe: {gastroEmail}");
+        }
+    }
 }
 
 app.Run();
