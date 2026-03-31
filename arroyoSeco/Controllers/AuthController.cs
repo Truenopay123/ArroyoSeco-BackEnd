@@ -215,21 +215,10 @@ public class AuthController : ControllerBase
             });
         }
 
-        // Admin/Oferente sin TOTP ni rostro → obligar a registrar rostro antes de entrar
+        // Admin/Oferente sin TOTP ni rostro → login normal (face auth es opcional)
         var rolesCheck = await _userManager.GetRolesAsync(user);
-        if (rolesCheck.Any(r => r.Equals("Admin", StringComparison.OrdinalIgnoreCase)
-                              || r.Equals("Oferente", StringComparison.OrdinalIgnoreCase)))
-        {
-            var enrollToken = _token.GenerateTempToken(user.Id, user.Email!);
-            return Ok(new
-            {
-                requiresFaceEnroll = true,
-                tempToken = enrollToken,
-                email = user.Email
-            });
-        }
 
-        // Login completo para Cliente — emitir JWT
+        // Login completo — emitir JWT
         if (!user.FechaPrimerLogin.HasValue)
         {
             user.FechaPrimerLogin = DateTime.UtcNow;
