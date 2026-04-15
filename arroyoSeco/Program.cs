@@ -427,19 +427,27 @@ using (var scope = app.Services.CreateScope())
             ALTER TABLE ""Resenas""
             ALTER COLUMN ""Estado"" SET DEFAULT 'publicada';");
 
-        // Tabla de pagos (Mercado Pago)
+        // Tabla de pagos (transferencia bancaria)
         appDbContext.Database.ExecuteSqlRaw(@"
             CREATE TABLE IF NOT EXISTS ""Pagos"" (
                 ""Id"" serial PRIMARY KEY,
                 ""ReservaId"" integer NOT NULL REFERENCES ""Reservas""(""Id"") ON DELETE CASCADE,
-                ""MercadoPagoPreferenceId"" text NULL,
-                ""MercadoPagoPaymentId"" text NULL,
                 ""Estado"" text NOT NULL DEFAULT 'Pendiente',
                 ""Monto"" numeric(18,2) NOT NULL DEFAULT 0,
                 ""MetodoPago"" text NULL,
+                ""ComprobanteUrl"" text NULL,
                 ""FechaCreacion"" timestamp with time zone NOT NULL DEFAULT now(),
                 ""FechaActualizacion"" timestamp with time zone NULL
             );");
+
+        // Migrar tabla Pagos existente: agregar ComprobanteUrl y eliminar columnas MP si existen
+        appDbContext.Database.ExecuteSqlRaw(@"
+            ALTER TABLE ""Pagos""
+            ADD COLUMN IF NOT EXISTS ""ComprobanteUrl"" text NULL;");
+        appDbContext.Database.ExecuteSqlRaw(@"
+            ALTER TABLE ""Pagos""
+            DROP COLUMN IF EXISTS ""MercadoPagoPreferenceId"",
+            DROP COLUMN IF EXISTS ""MercadoPagoPaymentId"";");
 
         // Cantidad de huéspedes por reserva
         appDbContext.Database.ExecuteSqlRaw(@"
@@ -478,19 +486,35 @@ using (var scope = app.Services.CreateScope())
                 ""FechaCreacion"" timestamp with time zone NOT NULL DEFAULT now()
             );");
 
-        // Tabla de pagos de gastronomía
+        // Tabla de pagos de gastronomía (transferencia bancaria)
         appDbContext.Database.ExecuteSqlRaw(@"
             CREATE TABLE IF NOT EXISTS ""PagosGastronomia"" (
                 ""Id"" serial PRIMARY KEY,
                 ""ReservaGastronomiaId"" integer NOT NULL REFERENCES ""ReservasGastronomia""(""Id"") ON DELETE CASCADE,
-                ""MercadoPagoPreferenceId"" text NULL,
-                ""MercadoPagoPaymentId"" text NULL,
                 ""Estado"" text NOT NULL DEFAULT 'Pendiente',
                 ""Monto"" numeric(18,2) NOT NULL DEFAULT 0,
                 ""MetodoPago"" text NULL,
+                ""ComprobanteUrl"" text NULL,
                 ""FechaCreacion"" timestamp with time zone NOT NULL DEFAULT now(),
                 ""FechaActualizacion"" timestamp with time zone NULL
             );");
+
+        // Migrar tabla PagosGastronomia existente: agregar ComprobanteUrl y eliminar columnas MP si existen
+        appDbContext.Database.ExecuteSqlRaw(@"
+            ALTER TABLE ""PagosGastronomia""
+            ADD COLUMN IF NOT EXISTS ""ComprobanteUrl"" text NULL;");
+        appDbContext.Database.ExecuteSqlRaw(@"
+            ALTER TABLE ""PagosGastronomia""
+            DROP COLUMN IF EXISTS ""MercadoPagoPreferenceId"",
+            DROP COLUMN IF EXISTS ""MercadoPagoPaymentId"";");
+
+        // Datos bancarios del oferente para transferencias
+        appDbContext.Database.ExecuteSqlRaw(@"
+            ALTER TABLE ""Oferentes""
+            ADD COLUMN IF NOT EXISTS ""Banco"" text NULL,
+            ADD COLUMN IF NOT EXISTS ""NumeroCuenta"" text NULL,
+            ADD COLUMN IF NOT EXISTS ""CLABE"" text NULL,
+            ADD COLUMN IF NOT EXISTS ""TitularCuenta"" text NULL;");
 
         // Generar folios para reservas gastronomía existentes que no tengan
         appDbContext.Database.ExecuteSqlRaw(@"

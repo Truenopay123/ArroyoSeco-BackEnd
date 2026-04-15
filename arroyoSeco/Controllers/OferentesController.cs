@@ -167,7 +167,11 @@ public class OferentesController : ControllerBase
             oferente.Tipo,
             oferente.Estado,
             Email = user?.Email,
-            Telefono = user?.PhoneNumber
+            Telefono = user?.PhoneNumber,
+            oferente.Banco,
+            oferente.NumeroCuenta,
+            oferente.CLABE,
+            oferente.TitularCuenta
         });
     }
 
@@ -213,9 +217,43 @@ public class OferentesController : ControllerBase
             oferente.Tipo,
             oferente.Estado,
             Email = user.Email,
-            Telefono = user.PhoneNumber
+            Telefono = user.PhoneNumber,
+            oferente.Banco,
+            oferente.NumeroCuenta,
+            oferente.CLABE,
+            oferente.TitularCuenta
+        });
+    }
+
+    /// <summary>
+    /// Actualizar datos bancarios del oferente actual
+    /// </summary>
+    [Authorize(Roles = "Oferente")]
+    [HttpPut("datos-bancarios")]
+    public async Task<IActionResult> UpdateDatosBancarios([FromBody] UpdateDatosBancariosRequest request, CancellationToken ct)
+    {
+        var userId = _current.UserId;
+        if (string.IsNullOrEmpty(userId)) return Unauthorized();
+
+        var oferente = await _db.Oferentes.FirstOrDefaultAsync(o => o.Id == userId, ct);
+        if (oferente == null) return NotFound(new { message = "Oferente no encontrado" });
+
+        oferente.Banco = request.Banco;
+        oferente.NumeroCuenta = request.NumeroCuenta;
+        oferente.CLABE = request.CLABE;
+        oferente.TitularCuenta = request.TitularCuenta;
+
+        await _db.SaveChangesAsync(ct);
+
+        return Ok(new
+        {
+            oferente.Banco,
+            oferente.NumeroCuenta,
+            oferente.CLABE,
+            oferente.TitularCuenta
         });
     }
 }
 
 public record UpdatePerfilRequest(string? Nombre, string? Telefono);
+public record UpdateDatosBancariosRequest(string? Banco, string? NumeroCuenta, string? CLABE, string? TitularCuenta);

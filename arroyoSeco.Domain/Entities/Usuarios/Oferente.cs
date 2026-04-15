@@ -13,6 +13,13 @@ public class Oferente
     public TipoOferente Tipo { get; set; } = TipoOferente.Ambos;
     public string Estado { get; set; } = "Pendiente"; // Pendiente, Activo, Inactivo, Suspendido
     public int NumeroAlojamientos { get; set; }
+
+    // Datos bancarios para pago por transferencia
+    public string? Banco { get; set; }
+    public string? NumeroCuenta { get; set; }
+    public string? CLABE { get; set; }
+    public string? TitularCuenta { get; set; }
+
     public ICollection<Alojamiento> Alojamientos { get; set; } = new List<Alojamiento>();
     public ICollection<Establecimiento> Establecimientos { get; set; } = new List<Establecimiento>();
 }

@@ -20,9 +20,6 @@
 
     <!-- Swagger -->
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0" />
-
-    <!-- Mercado Pago SDK (usado por PagosController) -->
-    <PackageReference Include="mercadopago-sdk" Version="2.11.0" />
   </ItemGroup>
 
   <ItemGroup>
