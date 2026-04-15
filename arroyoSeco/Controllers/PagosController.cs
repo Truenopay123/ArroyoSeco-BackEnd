@@ -76,9 +76,15 @@ public class PagosController : ControllerBase
         if (comprobante is null || comprobante.Length == 0)
             return BadRequest(new { message = "Debe adjuntar un comprobante." });
 
+        if (comprobante.Length < 1024)
+            return BadRequest(new { message = "El archivo es demasiado pequeño. Adjunta un comprobante válido." });
+
         var ext = Path.GetExtension(comprobante.FileName).ToLowerInvariant();
         if (ext is not (".jpg" or ".jpeg" or ".png" or ".pdf"))
             return BadRequest(new { message = "Solo se aceptan archivos JPG, PNG o PDF." });
+
+        if (monto <= 0)
+            return BadRequest(new { message = "El monto debe ser mayor a cero." });
 
         var reserva = await _db.Reservas
             .Include(r => r.Alojamiento)
@@ -88,8 +94,31 @@ public class PagosController : ControllerBase
         if (User.IsInRole("Cliente") && reserva.ClienteId != _current.UserId)
             return Forbid();
 
+        if (string.Equals(reserva.Estado, "Cancelada", StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { message = "No se puede enviar comprobante de una reserva cancelada." });
+
+        if (string.Equals(reserva.Estado, "Confirmada", StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { message = "Esta reserva ya fue confirmada." });
+
+        if (string.Equals(reserva.Estado, "PendienteConfirmacion", StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { message = "Ya enviaste un comprobante que está en revisión. Espera la respuesta del oferente." });
+
         if (!string.Equals(reserva.Estado, "Pendiente", StringComparison.OrdinalIgnoreCase))
             return BadRequest(new { message = "La reserva no esta en estado pendiente de pago." });
+
+        // Validar que la reserva no haya vencido (fecha de entrada ya pasó)
+        if (reserva.FechaEntrada.Date < DateTime.UtcNow.Date)
+            return BadRequest(new { message = "No se puede pagar una reserva cuya fecha de entrada ya pasó." });
+
+        // Limitar intentos de comprobante: máximo 3 pagos rechazados
+        var intentosRechazados = await _db.Pagos
+            .CountAsync(p => p.ReservaId == reservaId && p.Estado == "Rechazado");
+        if (intentosRechazados >= 3)
+        {
+            reserva.Estado = "Cancelada";
+            await _db.SaveChangesAsync();
+            return BadRequest(new { message = "Se superó el límite de intentos de pago. La reserva ha sido cancelada." });
+        }
 
         using var stream = comprobante.OpenReadStream();
         var relativePath = await _storage.SaveFileAsync(stream, comprobante.FileName, "pagos", default);

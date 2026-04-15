@@ -90,6 +90,7 @@ AppDomain.CurrentDomain.FirstChanceException += (s, e) =>
     Console.WriteLine("FIRST CHANCE: " + e.Exception.GetType().Name + " - " + e.Exception.Message);
 };
 builder.Services.AddHostedService<ShutdownLogger>();
+builder.Services.AddHostedService<ReservaCancelacionService>();
 builder.Services.Configure<FormOptions>(o =>
 {
     o.MultipartBodyLengthLimit = 50_000_000;
