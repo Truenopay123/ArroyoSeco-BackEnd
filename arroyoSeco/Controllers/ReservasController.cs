@@ -291,19 +291,22 @@ public class ReservasController : ControllerBase
         if (string.IsNullOrWhiteSpace(r.ComprobanteUrl))
             return NotFound(new { message = "La reserva no tiene comprobante" });
 
-        // Extraer nombre del archivo de la URL (/comprobantes/nombre.pdf → nombre.pdf)
-        var fileName = r.ComprobanteUrl.Split('/').Last();
-        var filePath = Path.Combine(_comprobantesPath, fileName);
+        // Extraer la ruta relativa del comprobante (puede ser "pagos/guid_nombre.pdf" o "guid_nombre.pdf")
+        var relativePath = r.ComprobanteUrl
+            .Replace("/comprobantes/", "", StringComparison.OrdinalIgnoreCase)
+            .TrimStart('/');
+        var filePath = Path.Combine(_comprobantesPath, relativePath.Replace('/', Path.DirectorySeparatorChar));
 
         if (!System.IO.File.Exists(filePath))
             return NotFound(new { message = "Archivo de comprobante no encontrado" });
 
         var fileBytes = await System.IO.File.ReadAllBytesAsync(filePath, ct);
-        var contentType = fileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) 
+        var actualFileName = Path.GetFileName(filePath);
+        var contentType = actualFileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) 
             ? "application/pdf" 
             : "image/jpeg";
 
-        return File(fileBytes, contentType, fileName);
+        return File(fileBytes, contentType, actualFileName);
     }
 
     public record CambiarEstadoReservaDto(string Estado);
